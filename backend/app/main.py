@@ -21,6 +21,7 @@ from app.adapters.calendar import GoogleCalendarAdapter, AppleICalAdapter
 from app.adapters.weather import WeatherAdapter
 from app.adapters.maps import MapsAdapter
 from app.services.logger import DebugLogger
+from app.services.langfuse_tracer import LangfuseTracer
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -83,6 +84,13 @@ async def test_run(user_id: str = "test-user-1", db = Depends(get_db)):
         # Create debug logger
         debug_logger = DebugLogger(db, run_id, user_id)
 
+        # Initialize Langfuse tracer
+        langfuse_tracer = LangfuseTracer(
+            settings.langfuse_public_key,
+            settings.langfuse_secret_key,
+            enabled=settings.langfuse_enabled,
+        )
+
         # Initialize adapters
         calendar_adapters = [
             GoogleCalendarAdapter(debug_logger, settings.google_calendar_client_id),
@@ -98,9 +106,9 @@ async def test_run(user_id: str = "test-user-1", db = Depends(get_db)):
         maps_adapter = MapsAdapter(debug_logger, settings.google_maps_api_key)
 
         # Initialize agents
-        planning_agent = PlanningAgent(debug_logger, calendar_adapters, weather_adapter, maps_adapter)
-        conversation_agent = ConversationAgent(debug_logger)
-        evaluation_agent = EvaluationAgent(debug_logger)
+        planning_agent = PlanningAgent(debug_logger, calendar_adapters, weather_adapter, maps_adapter, langfuse_tracer)
+        conversation_agent = ConversationAgent(debug_logger, langfuse_tracer)
+        evaluation_agent = EvaluationAgent(debug_logger, langfuse_tracer)
 
         # Build and run graph
         graph = DailyOpsGraph(debug_logger, planning_agent, conversation_agent, evaluation_agent)
@@ -138,6 +146,9 @@ async def test_run(user_id: str = "test-user-1", db = Depends(get_db)):
                 "overall_score": final_state.evaluation_score,
                 "debug_summary": final_state.debug_summary,
             }).execute()
+
+        # Flush Langfuse traces
+        langfuse_tracer.flush()
 
         return {
             "run_id": run_id,

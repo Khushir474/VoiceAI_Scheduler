@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     apple_ical_username: str = ""  # Apple ID email
     apple_ical_password: str = ""  # App-specific password
 
+    # Langfuse (observability)
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_enabled: bool = True
+
     # Application
     environment: str = "development"
     debug: bool = True

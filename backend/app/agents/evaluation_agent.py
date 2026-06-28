@@ -1,14 +1,17 @@
 """Evaluation & Debug Agent: Scores run and flags issues."""
 
+import time
 from app.agents.state import AgentState
 from app.services.logger import DebugLogger
+from app.services.langfuse_tracer import LangfuseTracer
 
 
 class EvaluationAgent:
     """Evaluation & Debug Agent: Quality checks and scoring."""
 
-    def __init__(self, debug_logger: DebugLogger):
+    def __init__(self, debug_logger: DebugLogger, langfuse_tracer: LangfuseTracer | None = None):
         self.debug_logger = debug_logger
+        self.langfuse_tracer = langfuse_tracer
 
     async def _check_tool_usage(self, state: AgentState) -> dict:
         """Check if tools were actually used in the plan."""
@@ -66,17 +69,46 @@ class EvaluationAgent:
         """Execute evaluation agent."""
         await self.debug_logger.log_agent_start("EvaluationAgent")
 
+        trace = self.langfuse_tracer.trace_agent("EvaluationAgent", state.run_id, state.user_id) if self.langfuse_tracer else None
+
         try:
             # Check tool usage
+            start_time = time.time()
             tool_checks = await self._check_tool_usage(state)
+            checks_latency = int((time.time() - start_time) * 1000)
+
+            if trace:
+                trace.span(
+                    "check_tool_usage",
+                    output_data=tool_checks,
+                    latency_ms=checks_latency,
+                )
 
             # Detect hallucinations
+            start_time = time.time()
             hallucinations = await self._detect_hallucinations(state)
+            hallucin_latency = int((time.time() - start_time) * 1000)
             state.hallucinations_detected = hallucinations
 
+            if trace:
+                trace.span(
+                    "detect_hallucinations",
+                    output_data={"count": len(hallucinations)},
+                    latency_ms=hallucin_latency,
+                )
+
             # Calculate score
+            start_time = time.time()
             score = await self._calculate_score(state, tool_checks)
+            score_latency = int((time.time() - start_time) * 1000)
             state.evaluation_score = score
+
+            if trace:
+                trace.span(
+                    "calculate_score",
+                    output_data={"score": score},
+                    latency_ms=score_latency,
+                )
 
             # Build debug summary
             debug_summary = {
@@ -101,6 +133,9 @@ class EvaluationAgent:
                 output_payload=debug_summary,
             )
 
+            if trace:
+                trace.end(output_data=debug_summary)
+
             await self.debug_logger.log_agent_end("EvaluationAgent", success=True)
 
         except Exception as e:
@@ -111,6 +146,10 @@ class EvaluationAgent:
                 message=f"Evaluation error: {str(e)}",
                 error=str(e),
             )
+
+            if trace:
+                trace.end(error=str(e))
+
             await self.debug_logger.log_agent_end("EvaluationAgent", success=False)
             state.error = str(e)
 

@@ -1,6 +1,7 @@
 """Planning Agent: Fetches data and builds the daily plan."""
 
 import json
+import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -17,6 +18,7 @@ from app.adapters.weather import WeatherAdapter
 from app.adapters.maps import MapsAdapter
 from app.services.logger import DebugLogger
 from app.services.calendar_merge import CalendarMerger
+from app.services.langfuse_tracer import LangfuseTracer
 
 
 class PlanningAgent:
@@ -28,11 +30,13 @@ class PlanningAgent:
         calendar_adapters: list[CalendarAdapter],
         weather_adapter: WeatherAdapter | None = None,
         maps_adapter: MapsAdapter | None = None,
+        langfuse_tracer: LangfuseTracer | None = None,
     ):
         self.debug_logger = debug_logger
         self.calendar_adapters = calendar_adapters
         self.weather_adapter = weather_adapter
         self.maps_adapter = maps_adapter
+        self.langfuse_tracer = langfuse_tracer
         self.calendar_merger = CalendarMerger(debug_logger)
 
     async def _fetch_calendar_events(self, user_id: str, target_date: date) -> list[CalendarEvent]:
@@ -91,17 +95,48 @@ class PlanningAgent:
         """Execute the planning agent."""
         await self.debug_logger.log_agent_start("PlanningAgent")
 
+        # Create Langfuse trace
+        trace = self.langfuse_tracer.trace_agent("PlanningAgent", state.run_id, state.user_id) if self.langfuse_tracer else None
+
         try:
             target_date = date.today()
 
             # Fetch calendar events
+            start_time = time.time()
             events = await self._fetch_calendar_events(state.user_id, target_date)
+            calendar_latency = int((time.time() - start_time) * 1000)
+
+            if trace:
+                trace.span(
+                    "fetch_calendar",
+                    input_data={"user_id": state.user_id, "date": target_date.isoformat()},
+                    output_data={"events_count": len(events)},
+                    latency_ms=calendar_latency,
+                )
 
             # Fetch weather
+            start_time = time.time()
             weather = await self._fetch_weather(state.user_id, "New York")
+            weather_latency = int((time.time() - start_time) * 1000)
 
-            # Fetch commute (mock home address)
+            if trace:
+                trace.span(
+                    "fetch_weather",
+                    output_data={"condition": weather.condition if weather else None},
+                    latency_ms=weather_latency,
+                )
+
+            # Fetch commute
+            start_time = time.time()
             commute = await self._fetch_commute("Home", "Work")
+            commute_latency = int((time.time() - start_time) * 1000)
+
+            if trace:
+                trace.span(
+                    "fetch_commute",
+                    output_data={"duration_minutes": commute.estimated_duration_minutes if commute else None},
+                    latency_ms=commute_latency,
+                )
 
             # Build plan
             plan = DailyPlanData(
@@ -130,6 +165,13 @@ class PlanningAgent:
                 },
             )
 
+            if trace:
+                trace.end(output_data={
+                    "events_count": len(events),
+                    "has_weather": weather is not None,
+                    "has_commute": commute is not None,
+                })
+
             await self.debug_logger.log_agent_end("PlanningAgent", success=True)
 
         except Exception as e:
@@ -140,6 +182,10 @@ class PlanningAgent:
                 message=f"Failed to generate plan: {str(e)}",
                 error=str(e),
             )
+
+            if trace:
+                trace.end(error=str(e))
+
             await self.debug_logger.log_agent_end("PlanningAgent", success=False)
             state.error = str(e)
 
