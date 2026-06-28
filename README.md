@@ -7,13 +7,32 @@ A voice-first and iMessage-first expert productivity assistant that orchestrates
 **DailyOps AI** calls you every morning, reviews your Google Calendar + Apple iCal events, checks weather and commute, asks if you have any missing plans, recommends workout timing, tells you when to leave and what to carry, then sends a concise iMessage summary.
 
 Key features:
-- 🎙️ Voice-first interaction via Vapi + ElevenLabs
+- 🎙️ Voice-first interaction via Vapi + ElevenLabs (full UX spec in CONVERSATION_DESIGN.md)
 - 📱 iMessage summaries (Twilio fallback)
 - 📅 Google Calendar + Apple iCal support
 - 🌦️ Weather & commute integration
 - 📊 Complete debug dashboard with tool calls and latency logging
 - 🏗️ Adapter-based architecture for extensibility
 - 🔗 LangGraph multi-agent orchestration
+- 📈 Langfuse observability + Supabase logging
+
+---
+
+## 📚 Documentation (30,000+ words)
+
+**Start here:** Use [`DOCUMENTATION.md`](DOCUMENTATION.md) as your navigation guide. All docs are cross-linked.
+
+| Document | Purpose | Read Time |
+|----------|---------|-----------|
+| **[EXECUTIVE_SUMMARY.md](EXECUTIVE_SUMMARY.md)** | Business opportunity, market fit, financials | 15 min |
+| **[TECHNICAL_ARCHITECTURE.md](TECHNICAL_ARCHITECTURE.md)** | File-by-file implementation reference | 30 min |
+| **[CONVERSATION_DESIGN.md](CONVERSATION_DESIGN.md)** | Voice UX, VAD, barge-in, error handling, state machine | 25 min |
+| **[QUICKSTART.md](QUICKSTART.md)** | Get running locally in 5 minutes | 5 min |
+| **[CLOUD_APIS.md](CLOUD_APIS.md)** | Setup Google Calendar, Apple iCal, OpenWeather, Maps, Vapi, Twilio, Langfuse | 20 min |
+| **[LANGFUSE.md](LANGFUSE.md)** | Observability, tracing, cost tracking, production monitoring | 15 min |
+| **[CLAUDE.md](CLAUDE.md)** | Architecture decisions and reasoning | 20 min |
+
+---
 
 ## MVP Flow
 
@@ -426,21 +445,69 @@ The MVP is successful if:
 
 ## Next Steps (Beyond MVP)
 
+**Phase 2: Voice UX** (See [CONVERSATION_DESIGN.md](CONVERSATION_DESIGN.md) for full spec)
+- [ ] Implement complete conversation state machine (12 states)
+- [ ] Add barge-in handling (user interrupts agent)
+- [ ] Implement endpointing (detect when user finishes speaking)
+- [ ] Add silence handling (5s timeout logic)
+- [ ] Implement error recovery (6 error types)
+- [ ] Add streaming TTS (start playback before full response)
+- [ ] Implement VAD tuning (adjust sensitivity per user)
+
+**Phase 3: Real APIs & LLMs**
 - [ ] Implement Google Calendar OAuth flow
-- [ ] Implement Apple iCal file parsing
-- [ ] Connect to actual Vapi endpoints
-- [ ] Integrate weather API
-- [ ] Integrate Google Maps commute API
-- [ ] Build conversation agent with Claude/Anthropic API
-- [ ] Build evaluation agent
+- [ ] Implement Apple iCal file parsing or CalDAV streaming
+- [ ] Connect to actual Vapi endpoints (not mock)
+- [ ] Integrate OpenWeather API
+- [ ] Integrate Google Maps Distance Matrix API
+- [ ] Build conversation agent with Claude/OpenAI API
+
+**Phase 4: Personalization & Memory**
+- [ ] Build real evaluation agent with LLM
 - [ ] Add memory/Cognee integration
+- [ ] User preference learning (patterns over time)
+- [ ] Dynamic recommendation adjustment
+- [ ] Predictive action triggers
+
+**Infrastructure & Deployment**
 - [ ] Deploy to Railway/Vercel
 - [ ] Add real-time dashboard updates with WebSockets
-- [ ] Implement user authentication
+- [ ] Implement user authentication (Supabase Auth)
+- [ ] Set up CI/CD pipeline
+- [ ] Configure monitoring alerts (Langfuse)
 
 ---
 
 ## Development Notes
+
+### Voice Conversation Flow
+
+Complete specification in [CONVERSATION_DESIGN.md](CONVERSATION_DESIGN.md):
+
+**Architecture** (STT → LLM → tools → TTS):
+- VAD detects speech start/stop
+- Streaming STT for low latency (1-3s)
+- Parallel LLM + tool execution
+- Streaming TTS for immediate playback
+- Barge-in support (user interrupts agent)
+- 12-state conversation state machine
+
+**Error Handling** (6 types):
+- STT errors (low confidence → retry)
+- Silence errors (timeout → assume no)
+- LLM errors (bad format → fallback)
+- Tool errors (API fails → cache)
+- TTS errors (high latency → parallel stream)
+- Network errors (disconnect → retry + SMS fallback)
+
+**Latency Budgets**:
+- STT: 1-3s (streaming) or 2-5s (batch)
+- LLM: 1-2s
+- Tools: 0.5-2s
+- TTS: 0.5-2s (streaming) or 3-5s (batch)
+- **Total target**: <8 seconds end-to-end
+
+See [CONVERSATION_DESIGN.md](CONVERSATION_DESIGN.md) sections on "Timing & Latency", "Voice Activity Detection", and "Conversation State Machine" for full details.
 
 ### Calendar Deduplication
 
@@ -449,17 +516,36 @@ Events are deduplicated if:
 - Start times within 5 minutes
 - OR similar titles + same time + similar location
 
-See `services/calendar_merge.py` for full logic.
+See `backend/app/services/calendar_merge.py` for full logic. Tested in `backend/app/tests/test_calendar_merge.py` (7 test cases).
 
 ### Debug Logging
 
-All agent steps, tool calls, and errors are logged to the `debug_logs` table with:
+**Dual-layer observability**:
+
+1. **Supabase** (local debugging):
+   - `debug_logs` table: all agent steps, events, errors
+   - `tool_calls` table: per-tool latency, input/output
+   - `calls` table: transcript, Vapi metadata
+   - Query locally for investigation
+
+2. **Langfuse** (production monitoring):
+   - Full workflow traces with spans
+   - Per-component latency
+   - LLM cost tracking
+   - Production dashboards
+   - Custom alerts
+
+**What gets logged**:
 - `run_id` – Unique run identifier
 - `agent_name` – Which agent
 - `event_type` – What happened
 - `latency_ms` – How long it took
 - `input_payload` / `output_payload` – Full data
 - `error` – If failed
+- `confidence` – For STT, LLM decisions
+- `tool_name`, `tool_status` – For tool calls
+
+See [CONVERSATION_DESIGN.md](CONVERSATION_DESIGN.md) section on "Observability & Logging" for complete logging specification.
 
 ### LangGraph State
 
@@ -468,12 +554,26 @@ Shared state across agents:
 class AgentState(BaseModel):
     run_id: str
     user_id: str
-    transcript: list[dict]
-    user_input: str
+    created_at: datetime
+    
+    # Conversation
+    transcript: list[dict]  # Full conversation history
+    user_input: str        # User's spoken request
+    
+    # Plan data
     plan: DailyPlanData | None
+    
+    # Evaluation
     evaluation_score: float | None
+    hallucinations_detected: list[str]
+    debug_summary: dict
+    
+    # Error tracking
     error: str | None
+    call_duration_seconds: int | None
 ```
+
+State flows through agents immutably. Each agent returns updated state to next agent via LangGraph.
 
 ---
 
