@@ -13,6 +13,8 @@ from app.agents.state import (
     WorkoutRecommendation,
 )
 from app.adapters.calendar.base import CalendarAdapter
+from app.adapters.weather import WeatherAdapter
+from app.adapters.maps import MapsAdapter
 from app.services.logger import DebugLogger
 from app.services.calendar_merge import CalendarMerger
 
@@ -24,9 +26,13 @@ class PlanningAgent:
         self,
         debug_logger: DebugLogger,
         calendar_adapters: list[CalendarAdapter],
+        weather_adapter: WeatherAdapter | None = None,
+        maps_adapter: MapsAdapter | None = None,
     ):
         self.debug_logger = debug_logger
         self.calendar_adapters = calendar_adapters
+        self.weather_adapter = weather_adapter
+        self.maps_adapter = maps_adapter
         self.calendar_merger = CalendarMerger(debug_logger)
 
     async def _fetch_calendar_events(self, user_id: str, target_date: date) -> list[CalendarEvent]:
@@ -62,85 +68,19 @@ class PlanningAgent:
         await self.debug_logger.log_agent_end("PlanningAgent.fetch_calendar", success=True)
         return deduplicated_events
 
-    async def _fetch_weather(self, user_id: str, location: str) -> WeatherData | None:
-        """Fetch weather for the day."""
-        await self.debug_logger.log_event(
-            agent_name="PlanningAgent",
-            event_type="weather_fetch_start",
-            message=f"Fetching weather for {location}",
-            input_payload={"location": location},
-        )
-
-        # TODO: Implement weather API call
-        # For MVP, return mock data
-        try:
-            weather = WeatherData(
-                temperature_high=72,
-                temperature_low=62,
-                condition="sunny",
-                humidity=65,
-                wind_speed_mph=10,
-                precipitation_probability=10,
-                uv_index=6,
-                sunrise=datetime.now(timezone.utc).replace(hour=6, minute=30),
-                sunset=datetime.now(timezone.utc).replace(hour=19, minute=30),
-            )
-
-            await self.debug_logger.log_event(
-                agent_name="PlanningAgent",
-                event_type="weather_fetch_complete",
-                message="Weather fetched successfully",
-                output_payload=weather.model_dump(),
-            )
-
-            return weather
-        except Exception as e:
-            await self.debug_logger.log_event(
-                agent_name="PlanningAgent",
-                event_type="weather_fetch_error",
-                level="error",
-                message=f"Failed to fetch weather: {str(e)}",
-                error=str(e),
-            )
+    async def _fetch_weather(self, latitude: float = 40.7128, longitude: float = -74.0060) -> WeatherData | None:
+        """Fetch weather via cloud API (default: NYC coordinates)."""
+        if not self.weather_adapter:
             return None
+
+        return await self.weather_adapter.get_weather(latitude, longitude)
 
     async def _fetch_commute(self, from_addr: str, to_addr: str) -> CommuteData | None:
-        """Fetch commute estimate."""
-        await self.debug_logger.log_event(
-            agent_name="PlanningAgent",
-            event_type="commute_fetch_start",
-            message="Fetching commute estimate",
-            input_payload={"from": from_addr, "to": to_addr},
-        )
-
-        # TODO: Implement Google Maps API call
-        # For MVP, return mock data
-        try:
-            commute = CommuteData(
-                from_address=from_addr,
-                to_address=to_addr,
-                estimated_duration_minutes=30,
-                traffic_condition="moderate",
-                departure_time=None,
-            )
-
-            await self.debug_logger.log_event(
-                agent_name="PlanningAgent",
-                event_type="commute_fetch_complete",
-                message=f"Commute estimate: {commute.estimated_duration_minutes} minutes",
-                output_payload=commute.model_dump(),
-            )
-
-            return commute
-        except Exception as e:
-            await self.debug_logger.log_event(
-                agent_name="PlanningAgent",
-                event_type="commute_fetch_error",
-                level="error",
-                message=f"Failed to fetch commute: {str(e)}",
-                error=str(e),
-            )
+        """Fetch commute via Google Maps API (cloud)."""
+        if not self.maps_adapter:
             return None
+
+        return await self.maps_adapter.get_commute(from_addr, to_addr)
 
     def _generate_plan_summary(self, plan: DailyPlanData) -> str:
         """Generate text summaries for different parts of the plan."""

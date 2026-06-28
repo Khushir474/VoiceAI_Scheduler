@@ -18,6 +18,8 @@ from app.agents.conversation_agent import ConversationAgent
 from app.agents.evaluation_agent import EvaluationAgent
 from app.agents.graph import DailyOpsGraph
 from app.adapters.calendar import GoogleCalendarAdapter, AppleICalAdapter
+from app.adapters.weather import WeatherAdapter
+from app.adapters.maps import MapsAdapter
 from app.services.logger import DebugLogger
 
 # Configure logging
@@ -84,11 +86,19 @@ async def test_run(user_id: str = "test-user-1", db = Depends(get_db)):
         # Initialize adapters
         calendar_adapters = [
             GoogleCalendarAdapter(debug_logger, settings.google_calendar_client_id),
-            AppleICalAdapter(debug_logger, settings.apple_ical_path),
+            AppleICalAdapter(
+                debug_logger,
+                caldav_url=settings.apple_ical_caldav_url if hasattr(settings, 'apple_ical_caldav_url') else None,
+                username=settings.apple_ical_username if hasattr(settings, 'apple_ical_username') else None,
+                password=settings.apple_ical_password if hasattr(settings, 'apple_ical_password') else None,
+            ),
         ]
 
+        weather_adapter = WeatherAdapter(debug_logger, settings.weather_api_key, settings.weather_provider)
+        maps_adapter = MapsAdapter(debug_logger, settings.google_maps_api_key)
+
         # Initialize agents
-        planning_agent = PlanningAgent(debug_logger, calendar_adapters)
+        planning_agent = PlanningAgent(debug_logger, calendar_adapters, weather_adapter, maps_adapter)
         conversation_agent = ConversationAgent(debug_logger)
         evaluation_agent = EvaluationAgent(debug_logger)
 

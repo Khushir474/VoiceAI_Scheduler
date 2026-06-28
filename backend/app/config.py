@@ -40,8 +40,10 @@ class Settings(BaseSettings):
     user_phone_number: str = ""
     imessage_bridge_url: str = "http://localhost:8001"
 
-    # Apple iCal
-    apple_ical_path: str = os.path.expanduser("~/Library/Calendars")
+    # Apple iCal (CalDAV)
+    apple_ical_caldav_url: str = "https://caldav.icloud.com"
+    apple_ical_username: str = ""  # Apple ID email
+    apple_ical_password: str = ""  # App-specific password
 
     # Application
     environment: str = "development"
