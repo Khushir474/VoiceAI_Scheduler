@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     twilio_phone_number: str = ""
     user_phone_number: str = ""
     imessage_bridge_url: str = "http://localhost:8001"
+    preferred_messaging_channel: str = "imessage"  # 'imessage' or 'twilio'
 
     # Apple iCal (CalDAV)
     apple_ical_caldav_url: str = "https://caldav.icloud.com"

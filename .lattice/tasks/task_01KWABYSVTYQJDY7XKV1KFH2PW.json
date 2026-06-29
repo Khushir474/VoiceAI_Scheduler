@@ -1,0 +1,31 @@
+{
+  "assigned_to": null,
+  "branch_links": [],
+  "comment_count": 0,
+  "complexity": "medium",
+  "created_at": "2026-06-29T18:58:36Z",
+  "created_by": "human:khushi",
+  "custom_fields": {},
+  "description": "Twilio SMS adapter is currently stubbed (returns mock success). Implement real Twilio Python SDK integration. iMessage bridge is functional. Wire both into conversation_agent.send_summary() flow. Touches: twilio_sms.py, conversation_agent.py. Acceptance: Real SMS delivered via Twilio; iMessage bridge tested; user can choose channel via preferred_messaging_channel; all sends logged to debug_logs with latency.",
+  "done_at": "2026-06-29T19:09:32Z",
+  "evidence_refs": [],
+  "id": "task_01KWABYSVTYQJDY7XKV1KFH2PW",
+  "last_event_id": "ev_01KWABYSVWSKPD2QQFE1XXGFN3",
+  "last_status_changed_at": "2026-06-29T18:58:36Z",
+  "priority": "high",
+  "relationships_out": [],
+  "reopened_count": 0,
+  "schema_version": 1,
+  "short_id": "DOPS-7",
+  "status": "done",
+  "tags": [
+    "messaging",
+    "twilio",
+    "imessage",
+    "phase4"
+  ],
+  "title": "Implement message summary delivery (Twilio + iMessage)",
+  "type": "task",
+  "updated_at": "2026-06-29T19:09:32Z",
+  "urgency": null
+}
