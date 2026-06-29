@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     vapi_assistant_id: str = ""
     vapi_phone_number_id: str = ""  # ID of the outbound number in Vapi dashboard
     vapi_webhook_url: str = "https://localhost:8000/api/webhook/vapi"
+    vapi_webhook_secret: str = ""  # Set in Vapi dashboard → Webhooks → Secret
     vapi_websocket_enabled: bool = True
     vapi_websocket_timeout_seconds: int = 300
 
