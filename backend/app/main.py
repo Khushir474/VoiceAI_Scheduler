@@ -22,6 +22,7 @@ from app.agents.graph import DailyOpsGraph
 from app.adapters.calendar import GoogleCalendarAdapter, AppleICalAdapter
 from app.adapters.weather import WeatherAdapter
 from app.adapters.maps import MapsAdapter
+from app.adapters.voice.vapi import VapiAdapter
 from app.services.logger import DebugLogger
 from app.services.langfuse_tracer import LangfuseTracer
 
@@ -130,9 +131,23 @@ async def test_run(user_id: str = "test-user-1", db = Depends(get_db)):
         weather_adapter = WeatherAdapter(debug_logger, settings.weather_api_key, settings.weather_provider)
         maps_adapter = MapsAdapter(debug_logger, settings.google_maps_api_key)
 
+        # Initialize voice adapter
+        vapi_adapter = VapiAdapter(
+            debug_logger,
+            settings.vapi_api_key,
+            assistant_id=settings.vapi_assistant_id,
+            phone_number_id=settings.vapi_phone_number_id,
+        )
+
         # Initialize agents
         planning_agent = PlanningAgent(debug_logger, calendar_adapters, weather_adapter, maps_adapter, langfuse_tracer)
-        conversation_agent = ConversationAgent(debug_logger, langfuse_tracer)
+        conversation_agent = ConversationAgent(
+            debug_logger,
+            langfuse_tracer,
+            provider=settings.llm_provider,
+            vapi_adapter=vapi_adapter,
+            recipient_phone=settings.user_phone_number,
+        )
         evaluation_agent = EvaluationAgent(debug_logger, langfuse_tracer)
 
         # Build and run graph

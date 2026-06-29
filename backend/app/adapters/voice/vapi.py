@@ -44,11 +44,13 @@ class VapiAdapter(VoiceAdapter):
         debug_logger: DebugLogger,
         api_key: str,
         assistant_id: str | None = None,
+        phone_number_id: str | None = None,
         timeout_seconds: int = 30,
     ):
         self.debug_logger = debug_logger
         self.api_key = api_key
         self.assistant_id = assistant_id
+        self.phone_number_id = phone_number_id
         self.base_url = "https://api.vapi.ai"
         self.timeout_seconds = timeout_seconds
         self.http_client = httpx.AsyncClient(
@@ -82,17 +84,39 @@ class VapiAdapter(VoiceAdapter):
         )
 
         try:
-            # Validate phone number format
             if not recipient_phone or not isinstance(recipient_phone, str):
                 raise ValueError("Invalid recipient phone number")
+            if not self.phone_number_id:
+                raise ValueError(
+                    "VAPI_PHONE_NUMBER_ID is not set. "
+                    "Go to Vapi dashboard → Phone Numbers, import your Twilio number, and copy its ID."
+                )
 
             payload = {
-                "phoneNumber": recipient_phone,
                 "assistantId": self.assistant_id,
-                "customData": {
+                "customer": {"number": recipient_phone},
+                "metadata": {
                     "run_id": run_id,
                     "initiated_at": datetime.utcnow().isoformat(),
                 },
+            }
+            if self.phone_number_id:
+                payload["phoneNumberId"] = self.phone_number_id
+
+            # Build assistantOverrides:
+            # - firstMessage: short screening response (answered before user picks up)
+            # - model.systemPrompt: full plan injected so Max knows what to say after accept
+            # assistantOverrides only sets call-level behavior — system prompt is
+            # patched directly onto the assistant via configure_assistant() before this call
+            payload["assistantOverrides"] = {
+                "firstMessageMode": "assistant-speaks-first",
+            }
+            # Disable Twilio's answering-machine detection — it's what plays the
+            # "press any key" prompt before connecting. Turning it off means Max
+            # answers immediately when the call is picked up.
+            payload["voicemailDetection"] = {
+                "provider": "twilio",
+                "voicemailDetectionEnabled": False,
             }
 
             # Make real API call with timeout
@@ -349,6 +373,56 @@ class VapiAdapter(VoiceAdapter):
         except Exception as e:
             logger.error(f"Error ending call {call_id}: {e}")
             return False
+
+    async def configure_assistant(self, system_prompt: str) -> bool:
+        """Patch the Vapi assistant with Max's base persona.
+
+        Called once at startup so the assistant is always correctly configured
+        regardless of whatever was set in the dashboard. Per-call plan content
+        is still injected via assistantOverrides.model.systemPrompt.
+        """
+        if not self.assistant_id:
+            return False
+        try:
+            model_config = await self.get_assistant_model_config()
+            patch = {
+                "firstMessage": "Hey, it's Max! Ready to run through your day?",
+                "firstMessageMode": "assistant-speaks-first",
+                "model": {
+                    "provider": model_config.get("provider", "openai"),
+                    "model": model_config.get("model", "gpt-4o-mini"),
+                    "systemPrompt": system_prompt,
+                },
+            }
+            response = await self.http_client.patch(
+                f"{self.base_url}/assistant/{self.assistant_id}",
+                json=patch,
+            )
+            if response.status_code == 200:
+                logger.info("Vapi assistant configured with Max persona")
+                return True
+            else:
+                logger.error(f"Failed to configure assistant: {response.status_code} {response.text}")
+                return False
+        except Exception as e:
+            logger.error(f"Error configuring assistant: {e}")
+            return False
+
+    async def get_assistant_model_config(self) -> dict:
+        """Fetch the model config from the configured Vapi assistant.
+
+        Returns the provider/model/messages block needed for assistantOverrides.
+        """
+        if not self.assistant_id:
+            return {}
+        try:
+            response = await self.http_client.get(f"{self.base_url}/assistant/{self.assistant_id}")
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("model", {})
+        except Exception as e:
+            logger.warning(f"Could not fetch assistant config: {e}")
+        return {}
 
     async def is_available(self) -> bool:
         """Check if Vapi is available.

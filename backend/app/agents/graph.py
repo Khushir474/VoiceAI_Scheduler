@@ -49,15 +49,15 @@ class DailyOpsGraph:
 
     async def _conversation_node(self, state: AgentState) -> dict[str, Any]:
         """Conversation node wrapper."""
-        # Convert dict back to AgentState
-        state = AgentState(**state)
+        if not isinstance(state, AgentState):
+            state = AgentState(**state)
         state = await self.conversation_agent.run(state)
         return state.model_dump()
 
     async def _evaluation_node(self, state: AgentState) -> dict[str, Any]:
         """Evaluation node wrapper."""
-        # Convert dict back to AgentState
-        state = AgentState(**state)
+        if not isinstance(state, AgentState):
+            state = AgentState(**state)
         state = await self.evaluation_agent.run(state)
         return state.model_dump()
 

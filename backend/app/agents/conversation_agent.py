@@ -15,6 +15,12 @@ from app.services.logger import DebugLogger
 from app.services.langfuse_tracer import LangfuseTracer
 from app.config import get_settings
 
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from app.adapters.voice.vapi import VapiAdapter
+
+from app.adapters.voice.dailyops_prompt import build_system_prompt
+
 
 class ConversationAgent:
     """Conversation Agent: Generates plan using LLM, manages interaction."""
@@ -24,16 +30,26 @@ class ConversationAgent:
         debug_logger: DebugLogger,
         langfuse_tracer: LangfuseTracer | None = None,
         provider: str = "anthropic",
+        vapi_adapter: "VapiAdapter | None" = None,
+        recipient_phone: str | None = None,
     ):
         self.debug_logger = debug_logger
         self.langfuse_tracer = langfuse_tracer
         self.provider = provider
+        self.vapi_adapter = vapi_adapter
+        self.recipient_phone = recipient_phone
         self.settings = get_settings()
 
         # Initialize LLM clients based on provider
         if self.provider == "anthropic":
             self.llm_client = Anthropic(api_key=self.settings.anthropic_api_key)
             self.model = "claude-3-5-sonnet-20241022"
+        elif self.provider == "openrouter":
+            self.llm_client = AsyncOpenAI(
+                api_key=self.settings.openrouter_api_key,
+                base_url="https://openrouter.ai/api/v1",
+            )
+            self.model = "anthropic/claude-haiku-4-5"
         else:
             self.llm_client = AsyncOpenAI(api_key=self.settings.openai_api_key)
             self.model = "gpt-4-turbo-preview"
@@ -320,8 +336,25 @@ class ConversationAgent:
                 }
             )
 
-            # In production: Listen for user input via Vapi, update state.user_input
-            # For MVP: user_input remains empty (will be filled by Vapi webhook)
+            # Trigger the phone call via Vapi
+            if self.vapi_adapter and self.recipient_phone:
+                # Patch the assistant with today's plan before dialing
+                await self.vapi_adapter.configure_assistant(
+                    system_prompt=build_system_prompt(speech_text),
+                )
+                call_start = time.time()
+                call_result = await self.vapi_adapter.initiate_call(
+                    recipient_phone=self.recipient_phone,
+                    run_id=state.run_id,
+                )
+                call_latency = int((time.time() - call_start) * 1000)
+                await self.debug_logger.log_event(
+                    agent_name="ConversationAgent",
+                    event_type="call_triggered",
+                    message=f"Vapi call initiated: {call_result.get('call_id', 'unknown')}",
+                    output_payload=call_result,
+                    latency_ms=call_latency,
+                )
 
             if state.user_input:
                 state.transcript.append(

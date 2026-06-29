@@ -14,11 +14,13 @@ class Settings(BaseSettings):
     # LLM APIs
     openai_api_key: str = ""
     anthropic_api_key: str = ""
-    llm_provider: str = "anthropic"  # 'anthropic' or 'openai'
+    openrouter_api_key: str = ""
+    llm_provider: str = "openrouter"  # 'anthropic', 'openai', or 'openrouter'
 
     # Vapi
     vapi_api_key: str
     vapi_assistant_id: str = ""
+    vapi_phone_number_id: str = ""  # ID of the outbound number in Vapi dashboard
     vapi_webhook_url: str = "https://localhost:8000/api/webhook/vapi"
     vapi_websocket_enabled: bool = True
     vapi_websocket_timeout_seconds: int = 300
