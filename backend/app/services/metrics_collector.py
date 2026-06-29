@@ -430,11 +430,12 @@ class MetricsCollector:
             final_state: Final FSM state
         """
         self.call_summary.end_time = datetime.utcnow()
-        self.call_summary.total_duration_ms = int(
+        duration_ms = (
             (self.call_summary.end_time - self.call_summary.start_time)
             .total_seconds()
             * 1000
         )
+        self.call_summary.total_duration_ms = max(1, round(duration_ms))
         self.call_summary.success = success
         self.call_summary.final_state = final_state
 

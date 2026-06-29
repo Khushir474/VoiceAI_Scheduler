@@ -131,9 +131,7 @@ class TestStreamingTTSOrchestrator:
         class MockTTSClient:
             async def synthesize_stream(self, text: str):
                 """Mock TTS synthesis."""
-                # Return dummy audio based on text length
-                audio_bytes = b"audio_" + str(len(text)).encode()
-                yield audio_bytes
+                yield b""
 
         return MockTTSClient()
 

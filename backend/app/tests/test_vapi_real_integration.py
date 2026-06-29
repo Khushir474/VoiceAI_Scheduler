@@ -44,6 +44,7 @@ def vapi_adapter(debug_logger):
         debug_logger=debug_logger,
         api_key="test_api_key_xyz",
         assistant_id="test_assistant_id",
+        phone_number_id="test_phone_number_id",
         timeout_seconds=10,
     )
 

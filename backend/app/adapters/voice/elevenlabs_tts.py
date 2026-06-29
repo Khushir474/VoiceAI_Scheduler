@@ -335,7 +335,7 @@ class StreamingTTSOrchestrator:
                 if chunk is None:
                     self.state = TTSPlaybackState.IDLE
                     break
-                chunk.is_final = (await self.playback_queue.qsize()) == 0
+                chunk.is_final = self.playback_queue.qsize() == 0
                 yield chunk
 
         # Run accumulate_text and generate_tts concurrently

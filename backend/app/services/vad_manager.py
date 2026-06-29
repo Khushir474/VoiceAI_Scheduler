@@ -211,8 +211,10 @@ class VADManager:
             return False
 
         # Apply sensitivity adjustment
-        # Lower sensitivity → higher effective threshold
-        adjusted_threshold = config.speech_start_threshold * (2 - config.sensitivity)
+        # Lower sensitivity → lower effective threshold (more sensitive)
+        # Higher sensitivity → higher effective threshold (less sensitive)
+        # At sensitivity=0.5 (default), threshold equals speech_start_threshold
+        adjusted_threshold = config.speech_start_threshold * config.sensitivity * 2
         adjusted_threshold = min(1.0, max(0.0, adjusted_threshold))
 
         return confidence >= adjusted_threshold
@@ -239,9 +241,10 @@ class VADManager:
         if vad_state != "idle":
             return False
 
-        # For speech end, use a lower threshold
-        # (we want to be sure speech has ended)
-        adjusted_threshold = config.speech_end_threshold / config.sensitivity
+        # Apply sensitivity adjustment
+        # At sensitivity=0.5 (default), threshold equals speech_end_threshold
+        # Lower sensitivity → higher threshold (need more confidence that speech ended)
+        adjusted_threshold = config.speech_end_threshold / (config.sensitivity * 2)
         adjusted_threshold = min(1.0, max(0.0, adjusted_threshold))
 
         return confidence >= adjusted_threshold

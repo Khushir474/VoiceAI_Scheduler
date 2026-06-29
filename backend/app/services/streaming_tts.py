@@ -164,8 +164,10 @@ class StreamingTTSValidator:
             "total_elapsed_ms": self.metrics.elapsed_ms(),
             "underrun_count": self.metrics.underrun_count,
             "overflow_count": self.metrics.overflow_count,
-            "generation_errors": self.metrics.generation_errors,
-            "playback_errors": self.metrics.playback_errors,
+            "errors": {
+                "generation": self.metrics.generation_errors,
+                "playback": self.metrics.playback_errors,
+            },
             "health_status": "healthy"
             if (self.metrics.underrun_count == 0 and self.metrics.overflow_count == 0)
             else "degraded",
@@ -303,7 +305,7 @@ class StreamingTTSManager:
                     "audio": chunk_data.get("audio"),
                     "text": chunk_data.get("text"),
                     "chunk_num": chunk_data.get("chunk_num"),
-                    "is_final": await playback_queue.empty(),
+                    "is_final": playback_queue.empty(),
                     "total_audio_bytes": self.metrics.total_audio_bytes,
                 }
 

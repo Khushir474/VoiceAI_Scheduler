@@ -201,24 +201,28 @@ class ErrorRecoveryStrategy:
             ErrorType.LLM_ERROR,
             ErrorType.LLM_TIMEOUT,
             ErrorType.LLM_INVALID_FORMAT,
+            ErrorType.LLM_HALLUCINATION,
         ]:
             return await self._recover_llm_error(error_context)
 
         elif error_type in [
             ErrorType.TOOL_ERROR,
             ErrorType.TOOL_TIMEOUT,
+            ErrorType.TOOL_PARSE_ERROR,
         ]:
             return await self._recover_tool_error(error_context)
 
         elif error_type in [
             ErrorType.TTS_ERROR,
             ErrorType.TTS_TIMEOUT,
+            ErrorType.TTS_CORRUPTED,
         ]:
             return await self._recover_tts_error(error_context)
 
         elif error_type in [
             ErrorType.NETWORK_ERROR,
             ErrorType.NETWORK_DISCONNECT,
+            ErrorType.NETWORK_TIMEOUT,
         ]:
             return await self._recover_network_error(error_context)
 
@@ -505,7 +509,6 @@ class ErrorRecoveryStrategy:
         """
         critical_errors = {
             ErrorType.NETWORK_DISCONNECT,
-            ErrorType.LLM_TIMEOUT,
             ErrorType.TTS_CORRUPTED,
         }
 

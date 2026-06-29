@@ -186,17 +186,8 @@ class TestSilenceTimeoutStage:
         stage = SilenceTimeoutStage()
         stage.start_silence()
 
-        # Advance time manually
-        stage.silence_started_at = datetime.utcnow().replace(
-            microsecond=0
-        ) - asyncio.get_event_loop().time() * 1000
         # Simulate 2.6 seconds of silence
-        import time
-
-        time.sleep(0.1)  # Brief sleep
-        stage.silence_started_at = datetime.utcnow().replace(microsecond=0) - timedelta(
-            milliseconds=2600
-        )
+        stage.silence_started_at = datetime.utcnow() - timedelta(milliseconds=2600)
 
         new_stage = stage.check_stage()
         assert new_stage == 1
@@ -270,12 +261,7 @@ class TestEndpointingHandler:
         # Simulate speech ending
         await endpointing_handler.process_vad_event("idle", 0.1)
 
-        # Advance to stage 1
-        endpointing_handler.silence_stage.silence_started_at = (
-            datetime.utcnow()
-            - asyncio.get_event_loop().time() * 1000
-        )
-        # Manually set to simulate elapsed time
+        # Manually set silence_started_at to simulate 2.6 seconds elapsed
         from datetime import timedelta
 
         endpointing_handler.silence_stage.silence_started_at = datetime.utcnow() - timedelta(

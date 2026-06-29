@@ -274,9 +274,10 @@ class ConversationStateMachine:
 
 
         if not is_valid:
+            trigger_str = getattr(trigger, 'value', str(trigger))
             self.logger.warning(
                 f"Invalid transition: {from_state.value} -> {to_state.value} "
-                f"with trigger {trigger.value}"
+                f"with trigger {trigger_str}"
             )
         return is_valid
 

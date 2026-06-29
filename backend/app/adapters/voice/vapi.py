@@ -95,7 +95,7 @@ class VapiAdapter(VoiceAdapter):
             payload = {
                 "assistantId": self.assistant_id,
                 "customer": {"number": recipient_phone},
-                "metadata": {
+                "customData": {
                     "run_id": run_id,
                     "initiated_at": datetime.utcnow().isoformat(),
                 },
