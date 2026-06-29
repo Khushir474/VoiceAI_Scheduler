@@ -346,7 +346,7 @@ async def handle_vapi(request: Request) -> dict:
 
     # Lazy Supabase import to keep the module testable without a live DB
     from app.db.supabase_client import get_supabase_client
-    supabase = get_supabase_client()
+    supabase = await get_supabase_client()
 
     t0 = time.time()
     try:

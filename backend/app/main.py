@@ -63,7 +63,7 @@ app.add_middleware(
 # Dependency: Supabase client
 async def get_db():
     """Dependency for Supabase client."""
-    return get_supabase_client()
+    return await get_supabase_client()
 
 
 # Health check endpoint
@@ -102,7 +102,10 @@ async def get_logs_mock(user_id: str = None, run_id: str = None, agent_name: str
 
 # Test endpoint: Trigger a daily planning run
 @app.post("/api/test-run")
-async def test_run(user_id: str = "test-user-1", db = Depends(get_db)):
+async def test_run(
+    user_id: str = "00000000-0000-0000-0000-000000000001",
+    db = Depends(get_db),
+):
     """Trigger a test daily planning run."""
     try:
         run_id = str(uuid.uuid4())
@@ -119,7 +122,7 @@ async def test_run(user_id: str = "test-user-1", db = Depends(get_db)):
 
         # Initialize adapters
         calendar_adapters = [
-            GoogleCalendarAdapter(debug_logger, settings.google_calendar_client_id),
+            GoogleCalendarAdapter(debug_logger, settings),
             AppleICalAdapter(
                 debug_logger,
                 caldav_url=settings.apple_ical_caldav_url if hasattr(settings, 'apple_ical_caldav_url') else None,
@@ -163,29 +166,38 @@ async def test_run(user_id: str = "test-user-1", db = Depends(get_db)):
         final_state = await graph.run(initial_state)
 
         # Save final plan to database
+        db_errors = []
         if final_state.plan:
-            await db.table("daily_plans").insert({
-                "run_id": run_id,
-                "user_id": user_id,
-                "plan_date": date.today().isoformat(),
-                "calendar_summary": final_state.plan.calendar_summary,
-                "weather_summary": final_state.plan.weather_summary,
-                "commute_summary": final_state.plan.commute_summary,
-                "workout_recommendation": final_state.plan.workout_recommendation.model_dump() if final_state.plan.workout_recommendation else None,
-                "carry_items": final_state.plan.carry_items,
-                "extra_user_plans": final_state.plan.extra_user_plans,
-                "final_summary": final_state.plan.final_summary,
-                "status": "completed" if not final_state.error else "failed",
-            }).execute()
+            try:
+                await db.table("daily_plans").insert({
+                    "run_id": run_id,
+                    "user_id": user_id,
+                    "plan_date": date.today().isoformat(),
+                    "calendar_summary": final_state.plan.calendar_summary,
+                    "weather_summary": final_state.plan.weather_summary,
+                    "commute_summary": final_state.plan.commute_summary,
+                    "workout_recommendation": final_state.plan.workout_recommendation.model_dump(mode="json") if final_state.plan.workout_recommendation else None,
+                    "carry_items": final_state.plan.carry_items,
+                    "extra_user_plans": final_state.plan.extra_user_plans,
+                    "final_summary": final_state.plan.final_summary,
+                    "status": "completed" if not final_state.error else "failed",
+                }).execute()
+            except Exception as e:
+                db_errors.append(f"daily_plans: {e}")
+                logger.warning(f"Failed to persist daily_plan: {e}")
 
         # Save evaluation
         if final_state.evaluation_score is not None:
-            await db.table("evaluation_scores").insert({
-                "run_id": run_id,
-                "user_id": user_id,
-                "overall_score": final_state.evaluation_score,
-                "debug_summary": final_state.debug_summary,
-            }).execute()
+            try:
+                await db.table("evaluation_scores").insert({
+                    "run_id": run_id,
+                    "user_id": user_id,
+                    "overall_score": final_state.evaluation_score,
+                    "debug_summary": final_state.debug_summary,
+                }).execute()
+            except Exception as e:
+                db_errors.append(f"evaluation_scores: {e}")
+                logger.warning(f"Failed to persist evaluation_scores: {e}")
 
         # Flush Langfuse traces
         langfuse_tracer.flush()
@@ -194,8 +206,9 @@ async def test_run(user_id: str = "test-user-1", db = Depends(get_db)):
             "run_id": run_id,
             "status": "success" if not final_state.error else "failed",
             "error": final_state.error,
-            "plan": final_state.plan.model_dump() if final_state.plan else None,
+            "plan": final_state.plan.model_dump(mode="json") if final_state.plan else None,
             "evaluation_score": final_state.evaluation_score,
+            "db_errors": db_errors if db_errors else None,
         }
 
     except Exception as e:

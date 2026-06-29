@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     supabase_url: str
     supabase_publishable_key: str
     supabase_secret_key: str
+    # Direct Postgres URL — Supabase dashboard → Project Settings → Database → URI
+    # Format: postgresql://postgres.PROJECT_REF:PASSWORD@HOST:PORT/postgres
+    database_url: str = ""
 
     # LLM APIs
     openai_api_key: str = ""

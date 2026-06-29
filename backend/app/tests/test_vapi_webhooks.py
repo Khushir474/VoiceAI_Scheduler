@@ -206,7 +206,7 @@ class TestHandleVapiEndpoint:
     async def test_call_started_returns_ok(self, mock_settings, mock_supabase):
         with (
             patch("app.api.vapi_webhooks.get_settings", return_value=mock_settings),
-            patch("app.db.supabase_client.get_supabase_client", return_value=mock_supabase),
+            patch("app.db.supabase_client.get_supabase_client", new=AsyncMock(return_value=mock_supabase)),
         ):
             client = _make_client()
             resp = self._post(client, _event_body("call.started"))
@@ -220,7 +220,7 @@ class TestHandleVapiEndpoint:
     async def test_call_ended_returns_ok(self, mock_settings, mock_supabase):
         with (
             patch("app.api.vapi_webhooks.get_settings", return_value=mock_settings),
-            patch("app.db.supabase_client.get_supabase_client", return_value=mock_supabase),
+            patch("app.db.supabase_client.get_supabase_client", new=AsyncMock(return_value=mock_supabase)),
         ):
             client = _make_client()
             resp = self._post(client, _event_body("call.ended"))
@@ -233,7 +233,7 @@ class TestHandleVapiEndpoint:
     async def test_transcript_chunk_returns_ok(self, mock_settings, mock_supabase):
         with (
             patch("app.api.vapi_webhooks.get_settings", return_value=mock_settings),
-            patch("app.db.supabase_client.get_supabase_client", return_value=mock_supabase),
+            patch("app.db.supabase_client.get_supabase_client", new=AsyncMock(return_value=mock_supabase)),
         ):
             client = _make_client()
             body = _event_body("transcript", {"transcript": "User: hello"})
@@ -245,7 +245,7 @@ class TestHandleVapiEndpoint:
     async def test_unknown_event_is_ignored(self, mock_settings, mock_supabase):
         with (
             patch("app.api.vapi_webhooks.get_settings", return_value=mock_settings),
-            patch("app.db.supabase_client.get_supabase_client", return_value=mock_supabase),
+            patch("app.db.supabase_client.get_supabase_client", new=AsyncMock(return_value=mock_supabase)),
         ):
             client = _make_client()
             resp = self._post(client, _event_body("assistant-request"))
@@ -281,7 +281,7 @@ class TestHandleVapiEndpoint:
 
         with (
             patch("app.api.vapi_webhooks.get_settings", return_value=mock_settings),
-            patch("app.db.supabase_client.get_supabase_client", return_value=mock_supabase),
+            patch("app.db.supabase_client.get_supabase_client", new=AsyncMock(return_value=mock_supabase)),
         ):
             client = _make_client()
             resp = client.post(
@@ -305,7 +305,7 @@ class TestHandleVapiEndpoint:
     def test_response_includes_latency_ms(self, mock_settings, mock_supabase):
         with (
             patch("app.api.vapi_webhooks.get_settings", return_value=mock_settings),
-            patch("app.db.supabase_client.get_supabase_client", return_value=mock_supabase),
+            patch("app.db.supabase_client.get_supabase_client", new=AsyncMock(return_value=mock_supabase)),
         ):
             client = _make_client()
             resp = self._post(client, _event_body("call.ended"))

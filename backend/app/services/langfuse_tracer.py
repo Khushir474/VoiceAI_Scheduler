@@ -49,18 +49,23 @@ class LangfuseTracer:
         if not self.enabled or not self.client:
             return NoOpTrace()
 
-        trace = self.client.trace(
-            name=agent_name,
-            input={"run_id": run_id, "user_id": user_id},
-            metadata={
-                "agent": agent_name,
-                "run_id": run_id,
-                "user_id": user_id,
-                "timestamp": datetime.utcnow().isoformat(),
-            },
-        )
-
-        return LangfuseTrace(trace, self.client, agent_name)
+        try:
+            trace = self.client.trace(
+                name=agent_name,
+                input={"run_id": run_id, "user_id": user_id},
+                metadata={
+                    "agent": agent_name,
+                    "run_id": run_id,
+                    "user_id": user_id,
+                    "timestamp": datetime.utcnow().isoformat(),
+                },
+            )
+            return LangfuseTrace(trace, self.client, agent_name)
+        except AttributeError:
+            # Langfuse v4 removed the .trace() API — degrade gracefully
+            logger.warning("Langfuse .trace() not available (v4 SDK?); using no-op tracer")
+            self.enabled = False
+            return NoOpTrace()
 
     def trace_tool_call(
         self,
