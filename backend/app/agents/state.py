@@ -88,9 +88,18 @@ class AgentState(BaseModel):
     user_id: str
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
-    # Conversation state
+    # Conversation state (FSM)
+    current_state: str = "greeting"  # ConversationState enum value
+    previous_state: str | None = None
+    state_changed_at: datetime = Field(default_factory=datetime.utcnow)
     transcript: list[dict[str, str]] = Field(default_factory=list)
     user_input: str = ""
+
+    # Interaction tracking
+    barge_in_count: int = 0
+    silence_timeout_count: int = 0
+    stt_attempts: int = 0
+    stt_low_confidence_count: int = 0
 
     # Planning data
     plan: DailyPlanData | None = None
@@ -100,6 +109,8 @@ class AgentState(BaseModel):
     hallucinations_detected: list[str] = Field(default_factory=list)
     debug_summary: dict[str, Any] = Field(default_factory=dict)
 
-    # Metadata
+    # Error tracking
     error: str | None = None
+    error_count: int = 0
+    error_recovery_attempts: int = 0
     call_duration_seconds: int | None = None
