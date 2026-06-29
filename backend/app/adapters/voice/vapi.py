@@ -108,15 +108,15 @@ class VapiAdapter(VoiceAdapter):
             # - model.systemPrompt: full plan injected so Max knows what to say after accept
             # assistantOverrides only sets call-level behavior — system prompt is
             # patched directly onto the assistant via configure_assistant() before this call
-            payload["assistantOverrides"] = {
-                "firstMessageMode": "assistant-speaks-first",
-            }
             # Disable Twilio's answering-machine detection — it's what plays the
             # "press any key" prompt before connecting. Turning it off means Max
             # answers immediately when the call is picked up.
-            payload["voicemailDetection"] = {
-                "provider": "twilio",
-                "voicemailDetectionEnabled": False,
+            payload["assistantOverrides"] = {
+                "firstMessageMode": "assistant-speaks-first",
+                "voicemailDetection": {
+                    "provider": "twilio",
+                    "enabled": False,
+                },
             }
 
             # Make real API call with timeout
