@@ -86,9 +86,11 @@ class PlanningAgent:
 
         return await self.maps_adapter.get_commute(from_addr, to_addr)
 
-    def _generate_plan_summary(self, plan: DailyPlanData) -> str:
-        """Generate text summaries for different parts of the plan."""
-        event_titles = [e.title for e in plan.calendar_events]
+    def _generate_calendar_summary(self, events: list[CalendarEvent]) -> str:
+        """Generate text summary of calendar events."""
+        event_titles = [e.title for e in events]
+        if not event_titles:
+            return "You have no events scheduled for today"
         return f"You have {len(event_titles)} events today: {', '.join(event_titles)}"
 
     async def run(self, state: AgentState) -> AgentState:
@@ -116,7 +118,7 @@ class PlanningAgent:
 
             # Fetch weather
             start_time = time.time()
-            weather = await self._fetch_weather(state.user_id, "New York")
+            weather = await self._fetch_weather()
             weather_latency = int((time.time() - start_time) * 1000)
 
             if trace:
@@ -126,9 +128,9 @@ class PlanningAgent:
                     latency_ms=weather_latency,
                 )
 
-            # Fetch commute
+            # Fetch commute (TODO: load from user preferences)
             start_time = time.time()
-            commute = await self._fetch_commute("Home", "Work")
+            commute = await self._fetch_commute("123 Main St, New York, NY", "456 Work Ave, New York, NY")
             commute_latency = int((time.time() - start_time) * 1000)
 
             if trace:
@@ -138,14 +140,19 @@ class PlanningAgent:
                     latency_ms=commute_latency,
                 )
 
+            # Generate summaries
+            calendar_summary = self._generate_calendar_summary(events)
+            weather_summary = f"{weather.condition} and {weather.temperature_high}°F" if weather else "Unable to fetch weather"
+            commute_summary = f"{commute.estimated_duration_minutes} minute commute" if commute else "No commute data"
+
             # Build plan
             plan = DailyPlanData(
                 calendar_events=events,
-                calendar_summary=self._generate_plan_summary(DailyPlanData(calendar_events=events)),
+                calendar_summary=calendar_summary,
                 weather=weather,
-                weather_summary=f"Sunny and {weather.temperature_high}°F" if weather else "Unable to fetch weather",
+                weather_summary=weather_summary,
                 commute=commute,
-                commute_summary=f"{commute.estimated_duration_minutes} minute commute" if commute else "No commute data",
+                commute_summary=commute_summary,
                 workout_recommendation=WorkoutRecommendation(
                     duration_minutes=30,
                     recommended_time="morning",

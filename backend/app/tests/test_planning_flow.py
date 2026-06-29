@@ -352,14 +352,14 @@ class TestConversationAgentLLMIntegration:
         }
 
         state = AgentState(run_id="test", user_id="user")
-        state.plan = AgentState(
-            run_id="test",
-            user_id="user",
-        ).plan
 
         from app.agents.state import DailyPlanData
 
-        state.plan = DailyPlanData()
+        state.plan = DailyPlanData(
+            calendar_summary="",
+            weather_summary="",
+            commute_summary=""
+        )
 
         conversation_agent._call_llm = AsyncMock(return_value=(json.dumps(incomplete_response), 250))
 
@@ -379,14 +379,17 @@ class TestConversationAgentLLMIntegration:
             "another_extra": 42,
         }
 
+        from app.agents.state import DailyPlanData
+
         state = AgentState(
             run_id="test",
             user_id="user",
-            plan=AgentState(run_id="test", user_id="user").plan or None,
+            plan=DailyPlanData(
+                calendar_summary="",
+                weather_summary="",
+                commute_summary=""
+            ),
         )
-        from app.agents.state import DailyPlanData
-
-        state.plan = DailyPlanData()
         conversation_agent._call_llm = AsyncMock(return_value=(json.dumps(response), 250))
 
         # Should not crash with extra fields
