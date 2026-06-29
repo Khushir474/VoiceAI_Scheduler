@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 @router.get("/plans/latest")
-async def get_latest_plan(user_id: str, supabase: Any):
+async def get_latest_plan(user_id: str, supabase: AsyncClient):
     """Get the latest daily plan for a user."""
     try:
         result = await supabase.table("daily_plans").select(
@@ -33,7 +33,7 @@ async def get_plans(
     user_id: str,
     limit: int = Query(10, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    supabase: Any = None,
+    supabase: AsyncClient = None,
 ):
     """Get daily plans for a user with pagination."""
     try:
@@ -56,7 +56,7 @@ async def get_debug_logs(
     agent_name: str | None = None,
     level: str | None = None,
     limit: int = Query(100, ge=1, le=500),
-    supabase: Any = None,
+    supabase: AsyncClient = None,
 ):
     """Get debug logs with filters."""
     try:
@@ -86,7 +86,7 @@ async def get_tool_calls(
     agent_name: str | None = None,
     tool_name: str | None = None,
     limit: int = Query(100, ge=1, le=500),
-    supabase: Any = None,
+    supabase: AsyncClient = None,
 ):
     """Get tool calls with filters."""
     try:
@@ -123,7 +123,7 @@ async def get_tool_calls(
 
 
 @router.get("/settings/{user_id}")
-async def get_user_settings(user_id: str, supabase: Any):
+async def get_user_settings(user_id: str, supabase: AsyncClient):
     """Get user settings/preferences."""
     try:
         result = await supabase.table("user_preferences").select("*").eq(
@@ -149,7 +149,7 @@ async def get_user_settings(user_id: str, supabase: Any):
 
 
 @router.post("/settings/{user_id}")
-async def update_user_settings(user_id: str, settings: dict, supabase: Any):
+async def update_user_settings(user_id: str, settings: dict, supabase: AsyncClient):
     """Update user settings/preferences."""
     try:
         await supabase.table("user_preferences").update(settings).eq(
@@ -164,7 +164,7 @@ async def update_user_settings(user_id: str, settings: dict, supabase: Any):
 
 
 @router.get("/overview/{user_id}")
-async def get_overview(user_id: str, supabase: Any):
+async def get_overview(user_id: str, supabase: AsyncClient):
     """Get dashboard overview for a user."""
     try:
         # Get latest plan

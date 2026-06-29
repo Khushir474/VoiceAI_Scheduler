@@ -17,7 +17,7 @@ async def send_with_fallback(
     debug_logger: DebugLogger,
     phone_number: str,
     content: str,
-    supabase: Any,
+    supabase: AsyncClient,
 ) -> dict:
     """
     Send message with automatic fallback.
@@ -109,7 +109,7 @@ async def send_message(
     run_id: str,
     user_id: str,
     content: str,
-    supabase: Any = Depends(get_supabase_client),
+    supabase: AsyncClient = Depends(get_supabase_client),
 ):
     """Send a message with automatic fallback (iMessage → Twilio SMS)."""
     try:
