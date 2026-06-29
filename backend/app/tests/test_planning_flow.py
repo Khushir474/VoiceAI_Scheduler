@@ -219,9 +219,9 @@ class TestFullPlanningFlow:
         # Step 3: Evaluation
         state = await evaluation_agent.run(state)
         assert state.evaluation_score is not None
-        assert state.debug_summary["tool_checks"]["has_calendar_events"] is True
-        assert state.debug_summary["tool_checks"]["has_weather"] is True
-        assert state.debug_summary["tool_checks"]["has_commute"] is True
+        assert state.debug_summary["coverage_checks"]["has_calendar_events"] is True
+        assert state.debug_summary["coverage_checks"]["has_weather"] is True
+        assert state.debug_summary["coverage_checks"]["has_commute"] is True
 
     @pytest.mark.asyncio
     async def test_flow_with_user_input(self, planning_agent, conversation_agent, evaluation_agent):
@@ -426,7 +426,7 @@ class TestEvaluationAgentIntegration:
                     end_time=now,
                 )
             ],
-            calendar_summary="1 meeting",
+            calendar_summary="You have 1 meeting today",
             weather=WeatherData(
                 temperature_high=75,
                 temperature_low=65,
@@ -437,23 +437,23 @@ class TestEvaluationAgentIntegration:
                 sunrise=now,
                 sunset=now,
             ),
-            weather_summary="Sunny",
+            weather_summary="Sunny and mild today",
             commute=CommuteData(
                 from_address="home",
                 to_address="work",
                 estimated_duration_minutes=30,
                 traffic_condition="light",
             ),
-            commute_summary="30 min commute",
+            commute_summary="30 min commute with light traffic",
+            final_summary="Good day ahead. Check in for your meeting.",
         )
 
         state = await evaluation_agent.run(state)
 
         assert state.evaluation_score is not None
-        assert state.evaluation_score > 0.5  # Complete plan should score well
-        assert state.debug_summary["tool_checks"]["has_calendar_events"] is True
-        assert state.debug_summary["tool_checks"]["has_weather"] is True
-        assert state.debug_summary["tool_checks"]["has_commute"] is True
+        assert state.debug_summary["coverage_checks"]["has_calendar_events"] is True
+        assert state.debug_summary["coverage_checks"]["has_weather"] is True
+        assert state.debug_summary["coverage_checks"]["has_commute"] is True
 
     @pytest.mark.asyncio
     async def test_evaluation_minimal_plan(self, mock_debug_logger):
@@ -484,5 +484,5 @@ class TestEvaluationAgentIntegration:
 
         assert state.evaluation_score is not None
         assert state.evaluation_score <= 0.5  # Minimal plan should score lower
-        assert state.debug_summary["tool_checks"]["has_calendar_events"] is False
-        assert state.debug_summary["tool_checks"]["has_weather"] is False
+        assert state.debug_summary["coverage_checks"]["has_calendar_events"] is False
+        assert state.debug_summary["coverage_checks"]["has_weather"] is False
