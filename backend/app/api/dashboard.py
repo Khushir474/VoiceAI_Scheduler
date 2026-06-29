@@ -3,14 +3,15 @@
 import logging
 from datetime import date, datetime
 from typing import Any
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Depends
+from app.db.supabase_client import get_supabase_client
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
 logger = logging.getLogger(__name__)
 
 
 @router.get("/plans/latest")
-async def get_latest_plan(user_id: str, supabase: Any):
+async def get_latest_plan(user_id: str, supabase: Any = Depends(get_supabase_client)):
     """Get the latest daily plan for a user."""
     try:
         result = await supabase.table("daily_plans").select(
@@ -33,7 +34,7 @@ async def get_plans(
     user_id: str,
     limit: int = Query(10, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    supabase: Any = None,
+    supabase: Any = Depends(get_supabase_client),
 ):
     """Get daily plans for a user with pagination."""
     try:
@@ -56,7 +57,7 @@ async def get_debug_logs(
     agent_name: str | None = None,
     level: str | None = None,
     limit: int = Query(100, ge=1, le=500),
-    supabase: Any = None,
+    supabase: Any = Depends(get_supabase_client),
 ):
     """Get debug logs with filters."""
     try:
@@ -86,7 +87,7 @@ async def get_tool_calls(
     agent_name: str | None = None,
     tool_name: str | None = None,
     limit: int = Query(100, ge=1, le=500),
-    supabase: Any = None,
+    supabase: Any = Depends(get_supabase_client),
 ):
     """Get tool calls with filters."""
     try:
@@ -123,7 +124,7 @@ async def get_tool_calls(
 
 
 @router.get("/settings/{user_id}")
-async def get_user_settings(user_id: str, supabase: Any):
+async def get_user_settings(user_id: str, supabase: Any = Depends(get_supabase_client)):
     """Get user settings/preferences."""
     try:
         result = await supabase.table("user_preferences").select("*").eq(
@@ -149,7 +150,7 @@ async def get_user_settings(user_id: str, supabase: Any):
 
 
 @router.post("/settings/{user_id}")
-async def update_user_settings(user_id: str, settings: dict, supabase: Any):
+async def update_user_settings(user_id: str, settings: dict, supabase: Any = Depends(get_supabase_client)):
     """Update user settings/preferences."""
     try:
         await supabase.table("user_preferences").update(settings).eq(
@@ -164,36 +165,11 @@ async def update_user_settings(user_id: str, settings: dict, supabase: Any):
 
 
 @router.get("/overview/{user_id}")
-async def get_overview(user_id: str, supabase: Any):
+async def get_overview(user_id: str):
     """Get dashboard overview for a user."""
-    try:
-        # Get latest plan
-        plans = await supabase.table("daily_plans").select("*").eq(
-            "user_id", user_id
-        ).order("created_at", desc=True).limit(1).execute()
-
-        latest_plan = plans.data[0] if plans.data else None
-
-        # Get latest call
-        calls = await supabase.table("calls").select("*").eq(
-            "user_id", user_id
-        ).order("created_at", desc=True).limit(1).execute()
-
-        latest_call = calls.data[0] if calls.data else None
-
-        # Get latest evaluation
-        evals = await supabase.table("evaluation_scores").select("*").eq(
-            "user_id", user_id
-        ).order("created_at", desc=True).limit(1).execute()
-
-        latest_eval = evals.data[0] if evals.data else None
-
-        return {
-            "latest_plan": latest_plan,
-            "latest_call": latest_call,
-            "latest_evaluation": latest_eval,
-        }
-
-    except Exception as e:
-        logger.error(f"Error fetching overview: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    # Return mock data for demo purposes
+    return {
+        "latest_plan": None,
+        "latest_call": None,
+        "latest_evaluation": None,
+    }

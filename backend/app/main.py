@@ -11,7 +11,9 @@ import uvicorn
 
 from app.config import get_settings
 from app.db.supabase_client import get_supabase_client
-from app.api import vapi_webhooks, dashboard, messages
+from app.api import vapi_webhooks
+# TODO: Fix dependency injection for dashboard and messages modules
+# from app.api import vapi_webhooks, dashboard, messages
 from app.agents.state import AgentState
 from app.agents.planning_agent import PlanningAgent
 from app.agents.conversation_agent import ConversationAgent
@@ -72,6 +74,29 @@ async def health_check():
         "environment": settings.environment,
         "debug": settings.debug,
     }
+
+
+# Mock dashboard endpoints for demo
+@app.get("/api/overview/{user_id}")
+async def get_overview_mock(user_id: str):
+    """Get dashboard overview for a user (mock data)."""
+    return {
+        "latest_plan": None,
+        "latest_call": None,
+        "latest_evaluation": None,
+    }
+
+
+@app.get("/api/plans/latest")
+async def get_latest_plan_mock(user_id: str):
+    """Get latest plan (mock data)."""
+    return {"plan": None}
+
+
+@app.get("/api/logs")
+async def get_logs_mock(user_id: str = None, run_id: str = None, agent_name: str = None, level: str = None, limit: int = 100):
+    """Get debug logs (mock data)."""
+    return {"logs": []}
 
 
 # Test endpoint: Trigger a daily planning run
@@ -165,8 +190,9 @@ async def test_run(user_id: str = "test-user-1", db = Depends(get_db)):
 
 # Include API routers
 app.include_router(vapi_webhooks.router)
-app.include_router(dashboard.router)
-app.include_router(messages.router)
+# TODO: Fix dependency injection for dashboard and messages routers
+# app.include_router(dashboard.router)
+# app.include_router(messages.router)
 
 
 if __name__ == "__main__":
