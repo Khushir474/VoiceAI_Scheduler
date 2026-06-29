@@ -69,11 +69,11 @@ class DailyPlanData(BaseModel):
     """Structured daily plan."""
 
     calendar_events: list[CalendarEvent] = Field(default_factory=list)
-    calendar_summary: str
+    calendar_summary: str = ""
     weather: WeatherData | None = None
-    weather_summary: str
+    weather_summary: str = ""
     commute: CommuteData | None = None
-    commute_summary: str
+    commute_summary: str = ""
     workout_recommendation: WorkoutRecommendation | None = None
     leave_time: datetime | None = None
     carry_items: list[str] = Field(default_factory=list)
