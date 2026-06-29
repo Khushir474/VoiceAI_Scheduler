@@ -803,7 +803,7 @@ triggerTestRun(userId)
 ```typescript
 const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
 )
 ```
 
@@ -1037,7 +1037,8 @@ pytest app/tests/ -v
 
 **Backend** (`.env`):
 - `SUPABASE_URL` – Supabase project URL
-- `SUPABASE_SERVICE_ROLE_KEY` – Service role key
+- `SUPABASE_PUBLISHABLE_KEY` – Publishable key
+- `SUPABASE_SECRET_KEY` – Secret key
 - `OPENAI_API_KEY` – For future LLM calls
 - `VAPI_API_KEY` – Vapi API key
 - `ELEVENLABS_API_KEY` – Voice synthesis
@@ -1054,7 +1055,7 @@ pytest app/tests/ -v
 **Frontend** (`.env.local`):
 - `NEXT_PUBLIC_API_URL` – Backend URL (default: `http://localhost:8000`)
 - `NEXT_PUBLIC_SUPABASE_URL` – Supabase URL
-- `NEXT_PUBLIC_SUPABASE_ANON_KEY` – Supabase anon key
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` – Supabase publishable key
 
 ---
 

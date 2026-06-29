@@ -18,18 +18,18 @@ Key features:
 
 ---
 
-## 📚 Documentation (30,000+ words)
+## 📚 Documentation
 
-**Start here:** Use [`DOCUMENTATION.md`](DOCUMENTATION.md) as your navigation guide. All docs are cross-linked.
+**Quick Links:**
 
 | Document | Purpose | Read Time |
 |----------|---------|-----------|
-| **[EXECUTIVE_SUMMARY.md](EXECUTIVE_SUMMARY.md)** | Business opportunity, market fit, financials | 15 min |
+| **[QUICKSTART.md](QUICKSTART.md)** | Get running in 5 minutes | 5 min |
+| **[CLOUD_APIS.md](CLOUD_APIS.md)** | Setup Google, Weather, Vapi, Twilio, Langfuse APIs | 20 min |
+| **[MESSAGING_SETUP.md](MESSAGING_SETUP.md)** | Twilio + iMessage bridge setup | 10 min |
+| **[LANGFUSE_SETUP.md](LANGFUSE_SETUP.md)** | Production observability in 5 minutes | 5 min |
+| **[LANGFUSE_INTEGRATION_GUIDE.md](LANGFUSE_INTEGRATION_GUIDE.md)** | Best practices and examples | 15 min |
 | **[TECHNICAL_ARCHITECTURE.md](TECHNICAL_ARCHITECTURE.md)** | File-by-file implementation reference | 30 min |
-| **[CONVERSATION_DESIGN.md](CONVERSATION_DESIGN.md)** | Voice UX, VAD, barge-in, error handling, state machine | 25 min |
-| **[QUICKSTART.md](QUICKSTART.md)** | Get running locally in 5 minutes | 5 min |
-| **[CLOUD_APIS.md](CLOUD_APIS.md)** | Setup Google Calendar, Apple iCal, OpenWeather, Maps, Vapi, Twilio, Langfuse | 20 min |
-| **[LANGFUSE.md](LANGFUSE.md)** | Observability, tracing, cost tracking, production monitoring | 15 min |
 | **[CLAUDE.md](CLAUDE.md)** | Architecture decisions and reasoning | 20 min |
 
 ---
@@ -211,7 +211,7 @@ Key features:
 
 4. **Set up Supabase**:
    - Create a new project at https://supabase.com
-   - Copy `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`
+   - Copy `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, and `SUPABASE_SECRET_KEY`
    - Run the migration:
      ```bash
      # Use Supabase dashboard SQL editor or psql
@@ -266,34 +266,138 @@ Key features:
 
 ---
 
-## Environment Variables
-
-See `.env.template` for the complete list. Key variables:
+## 🚀 Quick Start (5 minutes)
 
 ```bash
-# Supabase
+# 1. Backend setup
+cd backend
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# 2. Configure
+cp ../.env.template ../.env
+# Edit .env with your API keys (see setup status below)
+
+# 3. Start backend
+python -m app.main
+# Server runs at http://localhost:8000
+
+# 4. In another terminal, start frontend
+cd frontend
+npm install
+npm run dev
+# Frontend runs at http://localhost:3000
+
+# 5. Test
+curl -X POST http://localhost:8000/api/test-run
+```
+
+Then visit http://localhost:3000 to see the dashboard!
+
+See **[QUICKSTART.md](QUICKSTART.md)** for detailed instructions.
+
+---
+
+## Current Setup Status ✅
+
+### Configured & Ready
+- ✅ **Supabase** – Database + Auth (SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, SUPABASE_SECRET_KEY)
+- ✅ **Vapi** – Voice calling (VAPI_API_KEY, VAPI_ASSISTANT_ID)
+- ✅ **ElevenLabs** – Text-to-speech (ELEVENLABS_API_KEY)
+- ✅ **Google Maps** – Commute time (GOOGLE_MAPS_API_KEY)
+- ✅ **Twilio** – SMS fallback (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER)
+- ✅ **Messaging** – Automatic fallback (iMessage → Twilio SMS)
+
+### Pending
+- ⏳ **Google Calendar** – Needs OAuth flow: Run `python get_refresh_token.py`
+- ⏳ **Weather API** – Optional (uses mock data without key): Add WEATHER_API_KEY or WEATHER_PROVIDER
+- ⏳ **Langfuse** – Optional observability: Add LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY
+- ⏳ **Apple iCal** – Optional: Add APPLE_ICAL_USERNAME, APPLE_ICAL_PASSWORD
+- ⏳ **iMessage Bridge** – Optional (Twilio works as fallback): Set IMESSAGE_BRIDGE_URL
+
+### How to Complete Setup
+
+1. **Google Calendar OAuth** (5 min)
+   ```bash
+   pip install google-auth-oauthlib google-auth-httplib2 python-dotenv
+   python get_refresh_token.py
+   ```
+   Automatically updates `.env` with `GOOGLE_CALENDAR_REFRESH_TOKEN`
+
+2. **Weather API** (optional, 2 min)
+   - Get key: https://openweathermap.org/api (recommended)
+   - Add to `.env`: `WEATHER_API_KEY=xxx` and `WEATHER_PROVIDER=openweather`
+
+3. **Langfuse** (optional, 3 min)
+   - Sign up: https://langfuse.com
+   - Get keys: Settings → API Keys
+   - Add to `.env`: `LANGFUSE_PUBLIC_KEY=pk_pub_xxx` and `LANGFUSE_SECRET_KEY=sk_prod_xxx`
+   - See `LANGFUSE_SETUP.md` for details
+
+4. **iMessage Bridge** (optional, set up later)
+   - See `MESSAGING_SETUP.md` for instructions
+   - Twilio SMS works as automatic fallback
+
+---
+
+## Environment Variables
+
+All credentials go in `.env` (not committed to git). Template provided in `.env.template`:
+
+```bash
+# Database (REQUIRED)
 SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+SUPABASE_PUBLISHABLE_KEY=sb_publishable_xxx
+SUPABASE_SECRET_KEY=sb_secret_xxx
 
-# Vapi
-VAPI_API_KEY=your-vapi-key
-VAPI_ASSISTANT_ID=your-assistant-id
+# Voice (REQUIRED)
+VAPI_API_KEY=xxx
+VAPI_ASSISTANT_ID=xxx
+ELEVENLABS_API_KEY=xxx
 
-# ElevenLabs
-ELEVENLABS_API_KEY=your-elevenlabs-key
+# Calendars
+GOOGLE_CALENDAR_CLIENT_ID=xxx.apps.googleusercontent.com
+GOOGLE_CALENDAR_CLIENT_SECRET=xxx
+GOOGLE_CALENDAR_REFRESH_TOKEN=xxx  # Get via: python get_refresh_token.py
 
-# Google Calendar
-GOOGLE_CALENDAR_CLIENT_ID=...
-GOOGLE_CALENDAR_CLIENT_SECRET=...
-GOOGLE_CALENDAR_REFRESH_TOKEN=...
+# Maps & Weather
+GOOGLE_MAPS_API_KEY=xxx
+WEATHER_API_KEY=xxx  # Optional: OpenWeather or WeatherAPI
+WEATHER_PROVIDER=openweather  # or weatherapi
 
 # Messaging
-TWILIO_ACCOUNT_SID=...
-TWILIO_AUTH_TOKEN=...
+TWILIO_ACCOUNT_SID=ACxxx
+TWILIO_AUTH_TOKEN=xxx
+TWILIO_PHONE_NUMBER=+1234567890
 USER_PHONE_NUMBER=+1234567890
+IMESSAGE_BRIDGE_URL=http://localhost:8001  # Optional
 
-# iMessage Bridge
-IMESSAGE_BRIDGE_URL=http://localhost:8001
+# Observability (Optional)
+LANGFUSE_PUBLIC_KEY=pk_pub_xxx
+LANGFUSE_SECRET_KEY=sk_prod_xxx
+LANGFUSE_ENABLED=true
+
+# Application
+ENVIRONMENT=development
+DEBUG=true
+LOG_LEVEL=INFO
+```
+
+---
+
+## Helper Scripts
+
+### OAuth Setup
+```bash
+# Get Google Calendar refresh token (automatic .env update)
+python get_refresh_token.py
+```
+
+### Messaging Setup
+```bash
+# Automated iMessage bridge + Twilio setup with fallback
+python setup_messaging.py
 ```
 
 ---
@@ -446,7 +550,7 @@ The frontend dashboard includes:
 ### Frontend (Vercel)
 
 1. Connect GitHub repo to Vercel
-2. Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+2. Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
 3. Deploy
 
 ---

@@ -8,8 +8,8 @@ class Settings(BaseSettings):
 
     # Supabase
     supabase_url: str
-    supabase_service_role_key: str
-    supabase_anon_key: str = ""
+    supabase_publishable_key: str
+    supabase_secret_key: str
 
     # LLM APIs
     openai_api_key: str = ""
@@ -66,6 +66,7 @@ class Settings(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
+        extra = "ignore"  # Ignore unknown fields from .env
 
 
 @lru_cache()

@@ -3,8 +3,11 @@
 import logging
 from typing import Any, Optional
 from datetime import datetime
-from langfuse import Langfuse
-from langfuse.decorators import observe
+
+try:
+    from langfuse import Langfuse
+except ImportError:
+    Langfuse = None
 
 logger = logging.getLogger(__name__)
 

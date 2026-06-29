@@ -20,7 +20,8 @@ cp ../.env.template ../.env
 # Edit .env with your API keys (see CLOUD_APIS.md)
 # At minimum, set:
 # - SUPABASE_URL
-# - SUPABASE_SERVICE_ROLE_KEY
+# - SUPABASE_PUBLISHABLE_KEY
+# - SUPABASE_SECRET_KEY
 # - OPENAI_API_KEY (for future LLM calls)
 # - VAPI_API_KEY
 # - GOOGLE_MAPS_API_KEY
@@ -32,7 +33,7 @@ cp ../.env.template ../.env
 ```bash
 # Create a Supabase project at https://supabase.com
 
-# Copy SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY into .env
+# Copy SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, and SUPABASE_SECRET_KEY into .env
 
 # Run the migration in Supabase dashboard:
 # 1. Go to SQL Editor
@@ -93,7 +94,8 @@ Open browser: **http://localhost:3000**
 ```bash
 # Supabase (required)
 SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=eyJ...
+SUPABASE_PUBLISHABLE_KEY=eyJ...
+SUPABASE_SECRET_KEY=eyJ...
 
 # Optional (for testing with mock data)
 OPENAI_API_KEY=sk-...          # Future: LLM calls
@@ -178,7 +180,7 @@ curl http://localhost:8000/health
 ```bash
 # Supabase connection issue
 # 1. Verify SUPABASE_URL in .env
-# 2. Verify SUPABASE_SERVICE_ROLE_KEY is correct (not anon key)
+# 2. Verify SUPABASE_SECRET_KEY is correct (not publishable key)
 # 3. Check migrations were applied
 ```
 

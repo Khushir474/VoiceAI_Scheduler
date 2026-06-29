@@ -142,7 +142,7 @@ All with RLS enabled.
 ### Environment Setup for Local Dev:
 - Copy `.env.template` to `.env`
 - Fill in mock values for keys you don't have yet
-- Supabase: `pip install supabase` and set `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY`
+- Supabase: `pip install supabase` and set `SUPABASE_URL` + `SUPABASE_PUBLISHABLE_KEY` + `SUPABASE_SECRET_KEY`
 - For testing: `pytest app/tests/ -v`
 
 ---

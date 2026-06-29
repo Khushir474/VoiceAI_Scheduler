@@ -16,7 +16,8 @@ def mock_settings():
     """Mock settings with Google Calendar credentials."""
     return Settings(
         supabase_url="https://test.supabase.co",
-        supabase_service_role_key="test-key",
+        supabase_publishable_key="test-publishable-key",
+        supabase_secret_key="test-secret-key",
         openai_api_key="test-key",
         vapi_api_key="test-key",
         elevenlabs_api_key="test-key",
