@@ -456,6 +456,272 @@ class TestConversationAgentRun:
         debug_logger.log_agent_end.assert_called_with("ConversationAgent", success=False)
 
 
+class TestProcessUserInput:
+    """Tests for process_user_input() — LLM interpretation of user speech."""
+
+    @pytest.mark.asyncio
+    async def test_process_user_input_add_event(self, conversation_agent, sample_agent_state):
+        """User mentions a new event; action should be add_event."""
+        sample_agent_state.user_input = "I have a dentist appointment at 3pm"
+
+        llm_response = json.dumps({
+            "action": "add_event",
+            "new_event": {"title": "Dentist", "start_time": None, "end_time": None, "location": None},
+            "response": "Got it, I've noted your dentist appointment at 3pm.",
+            "updated_plan": {"final_summary": "Updated plan with dentist."},
+        })
+        conversation_agent._call_llm = AsyncMock(return_value=(llm_response, 200))
+
+        action, response = await conversation_agent.process_user_input(sample_agent_state)
+
+        assert action == "add_event"
+        assert "dentist" in response.lower()
+        assert sample_agent_state.plan.final_summary == "Updated plan with dentist."
+
+    @pytest.mark.asyncio
+    async def test_process_user_input_confirm(self, conversation_agent, sample_agent_state):
+        """User confirms the plan."""
+        sample_agent_state.user_input = "Sounds good, thanks!"
+
+        llm_response = json.dumps({
+            "action": "confirm",
+            "new_event": None,
+            "response": "Great, I'll send the summary to your phone.",
+            "updated_plan": None,
+        })
+        conversation_agent._call_llm = AsyncMock(return_value=(llm_response, 150))
+
+        action, response = await conversation_agent.process_user_input(sample_agent_state)
+
+        assert action == "confirm"
+        assert len(response) > 0
+
+    @pytest.mark.asyncio
+    async def test_process_user_input_updates_transcript(self, conversation_agent, sample_agent_state):
+        """Both user utterance and agent reply should land in transcript."""
+        sample_agent_state.user_input = "Nothing else, thanks"
+
+        llm_response = json.dumps({
+            "action": "confirm",
+            "response": "Perfect, have a great day!",
+            "new_event": None,
+            "updated_plan": None,
+        })
+        conversation_agent._call_llm = AsyncMock(return_value=(llm_response, 100))
+
+        await conversation_agent.process_user_input(sample_agent_state)
+
+        roles = [t["role"] for t in sample_agent_state.transcript]
+        assert "user" in roles
+        assert "assistant" in roles
+
+    @pytest.mark.asyncio
+    async def test_process_user_input_no_user_input(self, conversation_agent, sample_agent_state):
+        """Empty user_input should return clarify without calling LLM."""
+        sample_agent_state.user_input = ""
+        conversation_agent._call_llm = AsyncMock()
+
+        action, _ = await conversation_agent.process_user_input(sample_agent_state)
+
+        assert action == "clarify"
+        conversation_agent._call_llm.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_process_user_input_no_plan(self, conversation_agent):
+        """No plan should return clarify without calling LLM."""
+        state = AgentState(run_id="test", user_id="user", user_input="hello")
+        conversation_agent._call_llm = AsyncMock()
+
+        action, _ = await conversation_agent.process_user_input(state)
+
+        assert action == "clarify"
+        conversation_agent._call_llm.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_process_user_input_llm_error_graceful(self, conversation_agent, sample_agent_state):
+        """LLM error should degrade gracefully to clarify."""
+        sample_agent_state.user_input = "I said something"
+        conversation_agent._call_llm = AsyncMock(side_effect=Exception("API down"))
+
+        action, response = await conversation_agent.process_user_input(sample_agent_state)
+
+        assert action == "clarify"
+        assert len(response) > 0
+
+    @pytest.mark.asyncio
+    async def test_process_user_input_invalid_json_graceful(self, conversation_agent, sample_agent_state):
+        """Invalid JSON from LLM should fall back to clarify."""
+        sample_agent_state.user_input = "Some input"
+        conversation_agent._call_llm = AsyncMock(return_value=("{invalid json}", 100))
+
+        action, response = await conversation_agent.process_user_input(sample_agent_state)
+
+        assert action == "clarify"
+        assert isinstance(response, str)
+
+
+class TestSendSummary:
+    """Tests for send_summary() — SMS/iMessage delivery."""
+
+    @pytest.fixture
+    def mock_messaging_adapter(self, mocker):
+        adapter = mocker.AsyncMock()
+        adapter.send_message = mocker.AsyncMock(
+            return_value={"status": "sent", "message_id": "msg_123"}
+        )
+        return adapter
+
+    @pytest.mark.asyncio
+    async def test_send_summary_success(
+        self, conversation_agent, sample_agent_state, mock_messaging_adapter
+    ):
+        """Happy path: summary sent, returns True."""
+        sample_agent_state.plan.final_summary = "Have a great day!"
+
+        result = await conversation_agent.send_summary(
+            sample_agent_state, mock_messaging_adapter, "+15551234567"
+        )
+
+        assert result is True
+        mock_messaging_adapter.send_message.assert_called_once()
+        call_args = mock_messaging_adapter.send_message.call_args
+        assert call_args[0][0] == "+15551234567"
+        assert "DailyOps" in call_args[0][1]
+
+    @pytest.mark.asyncio
+    async def test_send_summary_no_plan(
+        self, conversation_agent, mock_messaging_adapter
+    ):
+        """Missing plan should return False without calling adapter."""
+        state = AgentState(run_id="test", user_id="user", plan=None)
+
+        result = await conversation_agent.send_summary(
+            state, mock_messaging_adapter, "+15551234567"
+        )
+
+        assert result is False
+        mock_messaging_adapter.send_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_send_summary_adapter_failure(
+        self, conversation_agent, sample_agent_state, mock_messaging_adapter
+    ):
+        """Adapter returning failed status should return False."""
+        mock_messaging_adapter.send_message = AsyncMock(
+            return_value={"status": "failed", "error": "number invalid"}
+        )
+
+        result = await conversation_agent.send_summary(
+            sample_agent_state, mock_messaging_adapter, "+15551234567"
+        )
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_send_summary_adapter_exception(
+        self, conversation_agent, sample_agent_state, mock_messaging_adapter
+    ):
+        """Adapter raising exception should return False."""
+        mock_messaging_adapter.send_message = AsyncMock(side_effect=Exception("timeout"))
+
+        result = await conversation_agent.send_summary(
+            sample_agent_state, mock_messaging_adapter, "+15551234567"
+        )
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_send_summary_includes_plan_details(
+        self, conversation_agent, sample_agent_state, mock_messaging_adapter
+    ):
+        """SMS text should include key plan fields when no final_summary."""
+        sample_agent_state.plan.final_summary = ""
+        sample_agent_state.plan.calendar_summary = "2 meetings"
+        sample_agent_state.plan.weather_summary = "Sunny"
+
+        await conversation_agent.send_summary(
+            sample_agent_state, mock_messaging_adapter, "+15551234567"
+        )
+
+        sms_text = mock_messaging_adapter.send_message.call_args[0][1]
+        assert "2 meetings" in sms_text
+        assert "Sunny" in sms_text
+
+
+class TestGenerateConfirmationPrompt:
+    """Tests for generate_confirmation_prompt()."""
+
+    @pytest.mark.asyncio
+    async def test_confirmation_prompt_success(self, conversation_agent, sample_plan_data):
+        """Returns LLM-generated confirmation question."""
+        llm_response = json.dumps({"message": "Does this plan work for you today?"})
+        conversation_agent._call_llm = AsyncMock(return_value=(llm_response, 100))
+
+        result = await conversation_agent.generate_confirmation_prompt(sample_plan_data)
+
+        assert "work for you" in result
+
+    @pytest.mark.asyncio
+    async def test_confirmation_prompt_llm_error_fallback(
+        self, conversation_agent, sample_plan_data
+    ):
+        """LLM failure falls back to default question."""
+        conversation_agent._call_llm = AsyncMock(side_effect=Exception("API error"))
+
+        result = await conversation_agent.generate_confirmation_prompt(sample_plan_data)
+
+        assert result == "Does this plan work for you?"
+
+    @pytest.mark.asyncio
+    async def test_confirmation_prompt_invalid_json_fallback(
+        self, conversation_agent, sample_plan_data
+    ):
+        """Invalid JSON falls back to default question."""
+        conversation_agent._call_llm = AsyncMock(return_value=("{bad json}", 100))
+
+        result = await conversation_agent.generate_confirmation_prompt(sample_plan_data)
+
+        assert result == "Does this plan work for you?"
+
+
+class TestSMSFormatting:
+    """Tests for _format_plan_for_sms()."""
+
+    def test_sms_uses_final_summary(self, conversation_agent, sample_plan_data):
+        """final_summary is used when present."""
+        sample_plan_data.final_summary = "Short plan."
+        result = conversation_agent._format_plan_for_sms(sample_plan_data)
+        assert "Short plan." in result
+
+    def test_sms_includes_calendar_summary(self, conversation_agent, sample_plan_data):
+        """Calendar summary appears in SMS text."""
+        sample_plan_data.final_summary = ""
+        sample_plan_data.calendar_summary = "3 meetings"
+        result = conversation_agent._format_plan_for_sms(sample_plan_data)
+        assert "3 meetings" in result
+
+    def test_sms_includes_carry_items(self, conversation_agent, sample_plan_data):
+        """Carry items appear in SMS text."""
+        sample_plan_data.final_summary = ""
+        sample_plan_data.carry_items = ["umbrella", "badge"]
+        result = conversation_agent._format_plan_for_sms(sample_plan_data)
+        assert "umbrella" in result
+        assert "badge" in result
+
+    def test_sms_includes_leave_time(self, conversation_agent, sample_plan_data):
+        """Leave time appears in SMS text."""
+        sample_plan_data.final_summary = ""
+        now = datetime.now(timezone.utc)
+        sample_plan_data.leave_time = now.replace(hour=8, minute=15)
+        result = conversation_agent._format_plan_for_sms(sample_plan_data)
+        assert "08:15" in result
+
+    def test_sms_starts_with_header(self, conversation_agent, sample_plan_data):
+        """SMS always starts with DailyOps header."""
+        result = conversation_agent._format_plan_for_sms(sample_plan_data)
+        assert result.startswith("📅 Your DailyOps Summary")
+
+
 class TestLLMCallWithRetry:
     """Tests for LLM call retry logic."""
 

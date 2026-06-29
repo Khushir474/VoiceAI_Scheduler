@@ -10,7 +10,7 @@ from anthropic import Anthropic, APITimeoutError, APIError
 from openai import AsyncOpenAI, APITimeoutError as OpenAITimeoutError
 
 from app.agents.state import AgentState, DailyPlanData, WorkoutRecommendation
-from app.agents.prompts import PlanGenerationPrompt
+from app.agents.prompts import PlanGenerationPrompt, ConversationPrompt
 from app.services.logger import DebugLogger
 from app.services.langfuse_tracer import LangfuseTracer
 from app.config import get_settings
@@ -18,6 +18,7 @@ from app.config import get_settings
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from app.adapters.voice.vapi import VapiAdapter
+    from app.adapters.messaging.base import MessageAdapter
 
 from app.adapters.voice.dailyops_prompt import build_system_prompt
 
@@ -280,6 +281,175 @@ class ConversationAgent:
 
         return " ".join(lines)
 
+    async def process_user_input(self, state: AgentState) -> tuple[str, str]:
+        """Interpret user's spoken response and update the plan if needed.
+
+        Calls LLM to classify the input as one of:
+          - "add_event"   user mentioned a new appointment
+          - "confirm"     user approved the plan
+          - "clarify"     user asked a question or needs more info
+          - "decline"     user rejected a recommendation
+
+        Appends both user utterance and agent response to state.transcript.
+
+        Returns:
+            (action, agent_response_text)
+        """
+        if not state.plan or not state.user_input:
+            fallback = "Sorry, I didn't catch that. Could you say that again?"
+            state.transcript.append({"role": "assistant", "content": fallback})
+            return "clarify", fallback
+
+        system_prompt = PlanGenerationPrompt.system_prompt()
+        user_prompt = PlanGenerationPrompt.user_input_processing_prompt(
+            state.user_input, state.plan
+        )
+
+        start_time = time.time()
+        try:
+            response_text, latency_ms = await self._call_llm(
+                system_prompt, user_prompt, temperature=0.3
+            )
+        except Exception as e:
+            await self.debug_logger.log_event(
+                agent_name="ConversationAgent",
+                event_type="user_input_llm_error",
+                level="error",
+                message=f"Failed to process user input: {e}",
+                error=str(e),
+            )
+            fallback = "I had trouble processing that. Let me continue with your current plan."
+            state.transcript.append({"role": "user", "content": state.user_input})
+            state.transcript.append({"role": "assistant", "content": fallback})
+            return "clarify", fallback
+
+        latency_ms = int((time.time() - start_time) * 1000)
+
+        try:
+            result = self._parse_json_response(response_text)
+        except ValueError:
+            result = {"action": "clarify", "response": "Got it, let me note that."}
+
+        action = result.get("action", "clarify")
+        agent_response = result.get("response", "Got it.")
+
+        # Apply plan update if LLM returned one
+        updated_plan = result.get("updated_plan")
+        if updated_plan and state.plan:
+            new_summary = updated_plan.get("final_summary")
+            if new_summary:
+                state.plan.final_summary = new_summary
+
+        state.transcript.append({"role": "user", "content": state.user_input})
+        state.transcript.append({"role": "assistant", "content": agent_response})
+
+        await self.debug_logger.log_event(
+            agent_name="ConversationAgent",
+            event_type="user_input_interpreted",
+            message=f"User action: {action}",
+            input_payload={"user_input": state.user_input},
+            output_payload={"action": action, "response": agent_response},
+            latency_ms=latency_ms,
+        )
+
+        return action, agent_response
+
+    def _format_plan_for_sms(self, plan: DailyPlanData) -> str:
+        """Format the daily plan as a concise SMS-friendly text."""
+        lines = ["📅 Your DailyOps Summary"]
+
+        if plan.final_summary:
+            lines.append(plan.final_summary)
+        else:
+            if plan.calendar_summary:
+                lines.append(f"📆 {plan.calendar_summary}")
+            if plan.weather_summary:
+                lines.append(f"🌤 {plan.weather_summary}")
+            if plan.commute_summary:
+                lines.append(f"🚗 {plan.commute_summary}")
+            if plan.leave_time:
+                lines.append(f"🕐 Leave by {plan.leave_time.strftime('%I:%M %p')}")
+            if plan.carry_items:
+                lines.append(f"🎒 Bring: {', '.join(plan.carry_items)}")
+            if plan.workout_recommendation:
+                wr = plan.workout_recommendation
+                lines.append(
+                    f"💪 Workout: {wr.duration_minutes} min in the {wr.recommended_time}"
+                )
+
+        return "\n".join(lines)
+
+    async def send_summary(
+        self,
+        state: AgentState,
+        messaging_adapter: "MessageAdapter",
+        recipient: str,
+    ) -> bool:
+        """Send the final daily plan as an SMS/iMessage summary.
+
+        Args:
+            state: Current agent state with plan
+            messaging_adapter: Configured MessageAdapter (Twilio or iMessage)
+            recipient: Phone number to send to
+
+        Returns:
+            True if sent successfully, False otherwise
+        """
+        if not state.plan:
+            await self.debug_logger.log_event(
+                agent_name="ConversationAgent",
+                event_type="summary_skipped",
+                level="warning",
+                message="No plan to send summary for",
+            )
+            return False
+
+        summary_text = self._format_plan_for_sms(state.plan)
+
+        start_time = time.time()
+        try:
+            result = await messaging_adapter.send_message(recipient, summary_text)
+            latency_ms = int((time.time() - start_time) * 1000)
+
+            success = result.get("status") in ("sent", "success")
+            await self.debug_logger.log_event(
+                agent_name="ConversationAgent",
+                event_type="summary_sent" if success else "summary_failed",
+                level="info" if success else "error",
+                message=f"Summary {'sent' if success else 'failed'} to {recipient}",
+                output_payload=result,
+                latency_ms=latency_ms,
+            )
+            return success
+
+        except Exception as e:
+            await self.debug_logger.log_event(
+                agent_name="ConversationAgent",
+                event_type="summary_error",
+                level="error",
+                message=f"Error sending summary: {e}",
+                error=str(e),
+            )
+            return False
+
+    async def generate_confirmation_prompt(self, plan: DailyPlanData) -> str:
+        """Generate a natural confirmation question for the user.
+
+        Returns:
+            Text for the agent to speak asking the user to confirm the plan.
+        """
+        system_prompt = PlanGenerationPrompt.system_prompt()
+        confirmation_prompt = ConversationPrompt.confirmation_prompt(plan)
+
+        try:
+            response_text, _ = await self._call_llm(
+                system_prompt, confirmation_prompt, temperature=0.4
+            )
+            result = self._parse_json_response(response_text)
+            return result.get("message", "Does this plan work for you?")
+        except Exception:
+            return "Does this plan work for you?"
+
     async def run(self, state: AgentState) -> AgentState:
         """Execute conversation agent with LLM-powered plan generation."""
         await self.debug_logger.log_agent_start("ConversationAgent")
@@ -356,25 +526,23 @@ class ConversationAgent:
                     latency_ms=call_latency,
                 )
 
+            # If user has already spoken, process it through LLM
             if state.user_input:
-                state.transcript.append(
-                    {
-                        "role": "user",
-                        "content": state.user_input,
-                    }
-                )
+                action, response_text = await self.process_user_input(state)
 
                 if trace:
                     trace.span(
-                        "user_input",
+                        "process_user_input",
                         input_data={"user_input": state.user_input},
+                        output_data={"action": action, "response_length": len(response_text)},
                     )
 
                 await self.debug_logger.log_event(
                     agent_name="ConversationAgent",
-                    event_type="user_input_received",
-                    message=f"User said: {state.user_input}",
+                    event_type="user_input_processed",
+                    message=f"User action: {action}",
                     input_payload={"user_input": state.user_input},
+                    output_payload={"action": action},
                 )
 
             if trace:
