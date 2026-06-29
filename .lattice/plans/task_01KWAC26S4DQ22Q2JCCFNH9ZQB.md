@@ -1,0 +1,3 @@
+# DOPS-14: Luma event suggestions during voice call (tabled — no public API)
+
+Investigate and implement Luma integration for real-time event suggestions during the daily call. Currently tabled because Luma has no public API for events hosted by others. When API becomes available: fetch local events, present 2-3 suggestions mid-call, ask 2-3 follow-up questions based on user answer (e.g. event type preference → filter by category). Touches: adapters/events/luma_adapter.py (new), conversation_agent.py. Acceptance: Agent surfaces relevant local events during call; follow-up questions narrow suggestions; results logged.

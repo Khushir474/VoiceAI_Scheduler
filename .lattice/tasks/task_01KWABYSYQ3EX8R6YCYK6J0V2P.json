@@ -1,0 +1,31 @@
+{
+  "assigned_to": null,
+  "branch_links": [],
+  "comment_count": 0,
+  "complexity": "high",
+  "created_at": "2026-06-29T18:58:36Z",
+  "created_by": "human:khushi",
+  "custom_fields": {},
+  "description": "Calendar adapters are read-only. Add create_event() to CalendarAdapter base class and implement in GoogleCalendarAdapter and AppleICalAdapter. Conversation agent triggers event creation after user confirms. Only ADD events, no decline/delete. Touches: adapters/calendar/base.py, google_calendar.py, apple_ical.py, conversation_agent.py. Acceptance: Agent can create events in both Google Calendar and Apple iCal; confirmation flow before write; mutations logged to debug_logs.",
+  "done_at": null,
+  "evidence_refs": [],
+  "id": "task_01KWABYSYQ3EX8R6YCYK6J0V2P",
+  "last_event_id": "ev_01KWAC8K701KAX4PZM1KV2W5RY",
+  "last_status_changed_at": "2026-06-29T18:58:36Z",
+  "priority": "medium",
+  "relationships_out": [],
+  "reopened_count": 0,
+  "schema_version": 1,
+  "short_id": "DOPS-8",
+  "status": "backlog",
+  "tags": [
+    "calendar",
+    "write",
+    "voice",
+    "phase4"
+  ],
+  "title": "Add calendar event creation (voice-triggered write)",
+  "type": "task",
+  "updated_at": "2026-06-29T19:03:56Z",
+  "urgency": null
+}

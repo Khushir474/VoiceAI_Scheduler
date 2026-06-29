@@ -1,0 +1,31 @@
+{
+  "assigned_to": null,
+  "branch_links": [],
+  "comment_count": 0,
+  "complexity": "low",
+  "created_at": "2026-06-29T18:58:53Z",
+  "created_by": "human:khushi",
+  "custom_fields": {},
+  "description": "6 AM call may be blocked by iPhone Sleep Focus or DND. Configure Vapi call with max priority settings. Implement retry with backoff if call fails. Send SMS fallback after N failed attempts. Add call priority config and retry count to settings. Touches: adapters/voice/vapi.py, conversation_agent.py. Acceptance: Calls configured with highest urgency; retry logic implemented; SMS fallback triggered after failures; delivery status logged.",
+  "done_at": null,
+  "evidence_refs": [],
+  "id": "task_01KWABZASADDESPQP6EA8571F1",
+  "last_event_id": "ev_01KWABZASB12C2YGHNXDVYG45T",
+  "last_status_changed_at": "2026-06-29T18:58:53Z",
+  "priority": "medium",
+  "relationships_out": [],
+  "reopened_count": 0,
+  "schema_version": 1,
+  "short_id": "DOPS-12",
+  "status": "backlog",
+  "tags": [
+    "vapi",
+    "ios",
+    "notifications",
+    "phase4"
+  ],
+  "title": "Vapi call delivery through iPhone sleep/DND modes",
+  "type": "task",
+  "updated_at": "2026-06-29T18:58:53Z",
+  "urgency": null
+}

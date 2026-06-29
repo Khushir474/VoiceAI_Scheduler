@@ -23,6 +23,7 @@ from app.adapters.calendar import GoogleCalendarAdapter, AppleICalAdapter
 from app.adapters.weather import WeatherAdapter
 from app.adapters.maps import MapsAdapter
 from app.adapters.voice.vapi import VapiAdapter
+from app.adapters.messaging.router import build_messaging_adapter
 from app.services.logger import DebugLogger
 from app.services.langfuse_tracer import LangfuseTracer
 from app.services.daily_context import DailyContextService
@@ -126,8 +127,13 @@ async def get_daily_context_tool(request: Request, db = Depends(get_db)):
         # Fallback: accept plain JSON {"user_id": "..."}
         user_id = body.get("user_id")
 
-    if not user_id:
-        return {"results": [{"toolCallId": tool_call_id, "result": "Error: user_id is required"}]}
+    DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000001"
+
+    # Validate it's a UUID — Max sometimes guesses non-UUID values
+    import re
+    UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+    if not user_id or not UUID_RE.match(str(user_id)):
+        user_id = DEFAULT_USER_ID
 
     svc = DailyContextService(db)
     row = await svc.fetch(user_id)
@@ -214,6 +220,15 @@ async def test_run(
         # Run the workflow
         final_state = await graph.run(initial_state)
 
+        # Send summary via preferred messaging channel
+        messaging_result = None
+        if final_state.plan and settings.user_phone_number:
+            messaging_adapter = build_messaging_adapter(settings, debug_logger)
+            sent = await conversation_agent.send_summary(
+                final_state, messaging_adapter, settings.user_phone_number
+            )
+            messaging_result = {"sent": sent, "channel": settings.preferred_messaging_channel}
+
         # Save final plan to database
         db_errors = []
         if final_state.plan:
@@ -257,6 +272,7 @@ async def test_run(
             "error": final_state.error,
             "plan": final_state.plan.model_dump(mode="json") if final_state.plan else None,
             "evaluation_score": final_state.evaluation_score,
+            "messaging": messaging_result,
             "db_errors": db_errors if db_errors else None,
         }
 

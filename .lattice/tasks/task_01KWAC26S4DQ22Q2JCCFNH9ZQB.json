@@ -1,0 +1,32 @@
+{
+  "assigned_to": null,
+  "branch_links": [],
+  "comment_count": 0,
+  "complexity": null,
+  "created_at": "2026-06-29T19:00:27Z",
+  "created_by": "human:khushi",
+  "custom_fields": {},
+  "description": "Investigate and implement Luma integration for real-time event suggestions during the daily call. Currently tabled because Luma has no public API for events hosted by others. When API becomes available: fetch local events, present 2-3 suggestions mid-call, ask 2-3 follow-up questions based on user answer (e.g. event type preference \u2192 filter by category). Touches: adapters/events/luma_adapter.py (new), conversation_agent.py. Acceptance: Agent surfaces relevant local events during call; follow-up questions narrow suggestions; results logged.",
+  "done_at": null,
+  "evidence_refs": [],
+  "id": "task_01KWAC26S4DQ22Q2JCCFNH9ZQB",
+  "last_event_id": "ev_01KWADQX3WT1NNJK56SFG73DBP",
+  "last_status_changed_at": "2026-06-29T19:29:47Z",
+  "priority": "low",
+  "relationships_out": [],
+  "reopened_count": 0,
+  "schema_version": 1,
+  "short_id": "DOPS-14",
+  "status": "cancelled",
+  "tags": [
+    "luma",
+    "events",
+    "conversation",
+    "phase4",
+    "tabled"
+  ],
+  "title": "Luma event suggestions during voice call (tabled \u2014 no public API)",
+  "type": "spike",
+  "updated_at": "2026-06-29T19:29:47Z",
+  "urgency": null
+}

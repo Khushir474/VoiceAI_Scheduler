@@ -1,0 +1,32 @@
+{
+  "assigned_to": null,
+  "branch_links": [],
+  "comment_count": 0,
+  "complexity": "low",
+  "created_at": "2026-06-29T19:33:17Z",
+  "created_by": "human:khushi",
+  "custom_fields": {},
+  "description": "Max is greeting the user and saying the morning scheduler intro twice \u2014 once on call reception (Vapi assistant-speaks-first trigger) and once again after the user responds. Root cause likely: (1) firstMessageMode is set to 'assistant-speaks-first' in vapi.py initiate_call() which triggers an auto-greeting, AND (2) the system prompt or conversation_agent also sends a greeting message as the first LLM turn, causing a duplicate. Investigation: check vapi.py assistantOverrides.firstMessageMode, check dailyops_prompt.py for hardcoded greeting, check conversation_agent.run() for any explicit greeting send before the plan delivery, check Vapi assistant config on dashboard for a firstMessage field. Fix: ensure greeting happens exactly once \u2014 either via Vapi firstMessage (no LLM call needed) OR via conversation_agent first turn (disable Vapi auto-greeting), not both. Touches: adapters/voice/vapi.py, adapters/voice/dailyops_prompt.py, agents/conversation_agent.py. Acceptance: User hears Max greet exactly once on pickup; no duplicate intro; verified via Vapi call log and debug_logs transcript.",
+  "done_at": null,
+  "evidence_refs": [],
+  "id": "task_01KWADYAZ7AKH5ATVNT4MRVA9P",
+  "last_event_id": "ev_01KWADYAZ8BVHWDB1SDB9RGED5",
+  "last_status_changed_at": "2026-06-29T19:33:17Z",
+  "priority": "high",
+  "relationships_out": [],
+  "reopened_count": 0,
+  "schema_version": 1,
+  "short_id": "DOPS-19",
+  "status": "backlog",
+  "tags": [
+    "bug",
+    "vapi",
+    "greeting",
+    "conversation",
+    "phase4"
+  ],
+  "title": "Bug: Max says morning greeting/scheduler intro twice on call pickup",
+  "type": "bug",
+  "updated_at": "2026-06-29T19:33:17Z",
+  "urgency": null
+}

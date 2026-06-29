@@ -1,0 +1,31 @@
+{
+  "assigned_to": null,
+  "branch_links": [],
+  "comment_count": 0,
+  "complexity": "medium",
+  "created_at": "2026-06-29T18:58:36Z",
+  "created_by": "human:khushi",
+  "custom_fields": {},
+  "description": "Planning agent should: (1) if user has a work event, plan commute to work; (2) else find next in-person event and plan commute there; (3) if next event is virtual, tell user no commute needed. Detect virtual events by location field or platform tags (Zoom, Meet, Teams). Touches: agents/planning_agent.py, adapters/maps.py, agents/state.py. Acceptance: Correct commute recommendation based on day type; virtual event detection works; departure time includes buffer. if event exists but no location is explicitly mentioned, tell user about the event, it may be missing location information or is virtual",
+  "done_at": null,
+  "evidence_refs": [],
+  "id": "task_01KWABYT1GWA2RMSQV7Q0H7MKD",
+  "last_event_id": "ev_01KWACA4KTXN2PEB2PPE8DVYGN",
+  "last_status_changed_at": "2026-06-29T18:58:36Z",
+  "priority": "high",
+  "relationships_out": [],
+  "reopened_count": 0,
+  "schema_version": 1,
+  "short_id": "DOPS-9",
+  "status": "backlog",
+  "tags": [
+    "commute",
+    "planning",
+    "maps",
+    "phase4"
+  ],
+  "title": "Smart commute planning (work vs in-person vs virtual)",
+  "type": "task",
+  "updated_at": "2026-06-29T19:04:47Z",
+  "urgency": null
+}

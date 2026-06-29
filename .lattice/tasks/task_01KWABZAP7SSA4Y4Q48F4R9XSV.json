@@ -1,0 +1,31 @@
+{
+  "assigned_to": null,
+  "branch_links": [],
+  "comment_count": 0,
+  "complexity": "low",
+  "created_at": "2026-06-29T18:58:53Z",
+  "created_by": "human:khushi",
+  "custom_fields": {},
+  "description": "Conversation agent should be able to fetch real-time weather during the call when user asks. Weather adapter is already complete. Add a weather tool definition to the LangGraph agent, wire into conversation_agent.py. Cache results within session. Natural language responses. Touches: agents/conversation_agent.py, adapters/weather.py. Acceptance: Agent responds to weather questions mid-call; correct location used; results cached; API calls logged with latency; graceful error handling.",
+  "done_at": null,
+  "evidence_refs": [],
+  "id": "task_01KWABZAP7SSA4Y4Q48F4R9XSV",
+  "last_event_id": "ev_01KWACAKRNQ9214FZW4KG57E91",
+  "last_status_changed_at": "2026-06-29T18:58:53Z",
+  "priority": "low",
+  "relationships_out": [],
+  "reopened_count": 0,
+  "schema_version": 1,
+  "short_id": "DOPS-11",
+  "status": "backlog",
+  "tags": [
+    "weather",
+    "tools",
+    "conversation",
+    "phase4"
+  ],
+  "title": "On-demand weather lookup tool for conversation agent",
+  "type": "task",
+  "updated_at": "2026-06-29T19:05:02Z",
+  "urgency": null
+}

@@ -1,0 +1,31 @@
+{
+  "assigned_to": null,
+  "branch_links": [],
+  "comment_count": 0,
+  "complexity": "medium",
+  "created_at": "2026-06-29T19:37:13Z",
+  "created_by": "human:khushi",
+  "custom_fields": {},
+  "description": "When Max sends the end-of-call iMessage/SMS summary, it should include any events the user mentioned during the call that were not on their calendar (captured via DOPS-18 follow-up flow). These ad-hoc events should appear in the summary plan alongside calendar events, with their leave time, weather notes, and carry items suggestions. Implementation: conversation_agent accumulates user-mentioned events in AgentState during the call (new field: ad_hoc_events); at call end, _format_plan_for_sms() merges calendar events + ad_hoc_events into the summary; ad-hoc events visually distinguished (e.g. '\ud83d\udccc Added by you: Dinner in Midtown @ 7pm \u2014 leave by 6:15, bring umbrella'); summary sent via preferred messaging channel (DOPS-7). Touches: agents/state.py, agents/conversation_agent.py. Acceptance: Summary includes all user-mentioned events from the call; each ad-hoc event shows time, location, leave time, and carry items if available; calendar events and ad-hoc events both present in summary; all events logged to debug_logs before send.",
+  "done_at": null,
+  "evidence_refs": [],
+  "id": "task_01KWAE5H37WC0SY0N1EJ742WJQ",
+  "last_event_id": "ev_01KWAE5H38WG14BQP6CR76Y1P4",
+  "last_status_changed_at": "2026-06-29T19:37:13Z",
+  "priority": "high",
+  "relationships_out": [],
+  "reopened_count": 0,
+  "schema_version": 1,
+  "short_id": "DOPS-20",
+  "status": "backlog",
+  "tags": [
+    "summary",
+    "conversation",
+    "messaging",
+    "phase4"
+  ],
+  "title": "Include user-mentioned off-calendar events in end-of-call summary plan",
+  "type": "task",
+  "updated_at": "2026-06-29T19:37:13Z",
+  "urgency": null
+}

@@ -84,10 +84,10 @@ GET_DAILY_CONTEXT_TOOL = {
             "properties": {
                 "user_id": {
                     "type": "string",
-                    "description": "The user's UUID from the DailyOps system.",
+                    "description": "The user's UUID. If unknown, pass any string — the server resolves to the default user.",
                 }
             },
-            "required": ["user_id"],
+            "required": [],
         },
     },
 }

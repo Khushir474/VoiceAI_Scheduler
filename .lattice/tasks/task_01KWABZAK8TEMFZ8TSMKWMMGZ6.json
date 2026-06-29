@@ -1,0 +1,30 @@
+{
+  "assigned_to": null,
+  "branch_links": [],
+  "comment_count": 0,
+  "complexity": "low",
+  "created_at": "2026-06-29T18:58:53Z",
+  "created_by": "human:khushi",
+  "custom_fields": {},
+  "description": "Add first_event_buffer_minutes to user_preferences table (default 60). Planning agent reads this preference and calculates: wake_time = first_event_time - commute_minutes - buffer_minutes. Include buffer rationale in plan summary and voice call. Edge case: alert user if buffer + commute exceeds available time. Touches: migrations/, agents/state.py, agents/planning_agent.py. Acceptance: Preference persisted in DB; wake-up time recommendation accounts for buffer; voice agent mentions buffer.",
+  "done_at": null,
+  "evidence_refs": [],
+  "id": "task_01KWABZAK8TEMFZ8TSMKWMMGZ6",
+  "last_event_id": "ev_01KWABZAK941FBAG36ZMX26169",
+  "last_status_changed_at": "2026-06-29T18:58:53Z",
+  "priority": "medium",
+  "relationships_out": [],
+  "reopened_count": 0,
+  "schema_version": 1,
+  "short_id": "DOPS-10",
+  "status": "backlog",
+  "tags": [
+    "preferences",
+    "planning",
+    "phase4"
+  ],
+  "title": "Pre-event buffer user preference",
+  "type": "task",
+  "updated_at": "2026-06-29T18:58:53Z",
+  "urgency": null
+}
