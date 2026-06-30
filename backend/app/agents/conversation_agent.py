@@ -10,15 +10,16 @@ from anthropic import Anthropic, APITimeoutError, APIError
 from openai import AsyncOpenAI, APITimeoutError as OpenAITimeoutError
 
 from app.agents.state import AgentState, DailyPlanData, WorkoutRecommendation
-from app.agents.prompts import PlanGenerationPrompt, ConversationPrompt
+from app.agents.prompts import PlanGenerationPrompt, ConversationPrompt, PostCallSummaryPrompt
 from app.services.logger import DebugLogger
-from app.services.langfuse_tracer import LangfuseTracer
+from app.services.langfuse_tracer import LangfuseTracer, observe, propagate_attributes
 from app.config import get_settings
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from app.adapters.voice.vapi import VapiAdapter
     from app.adapters.messaging.base import MessageAdapter
+    from app.adapters.calendar.base import CalendarAdapter
 
 from app.adapters.voice.dailyops_prompt import build_system_prompt
 
@@ -55,6 +56,7 @@ class ConversationAgent:
             self.llm_client = AsyncOpenAI(api_key=self.settings.openai_api_key)
             self.model = "gpt-4-turbo-preview"
 
+    @observe(name="llm-claude", as_type="generation", capture_input=False, capture_output=False)
     async def _call_claude(
         self,
         system_prompt: str,
@@ -93,6 +95,7 @@ class ConversationAgent:
                     continue
                 raise Exception(f"Claude API error: {str(e)}")
 
+    @observe(name="llm-openai", as_type="generation", capture_input=False, capture_output=False)
     async def _call_openai(
         self,
         system_prompt: str,
@@ -181,18 +184,7 @@ class ConversationAgent:
         system_prompt = PlanGenerationPrompt.system_prompt()
         user_prompt = PlanGenerationPrompt.generate_plan_prompt(state)
 
-        start_time = time.time()
         response_text, latency_ms = await self._call_llm(system_prompt, user_prompt, temperature=0.5)
-        total_latency = int((time.time() - start_time) * 1000)
-
-        # Log LLM call to Langfuse
-        if self.langfuse_tracer:
-            trace = self.langfuse_tracer.trace_llm_call(
-                model=self.model,
-                messages=[{"role": "user", "content": user_prompt}],
-                run_id=state.run_id,
-            )
-            trace.end(completion=response_text, tokens_prompt=None, tokens_completion=None)
 
         # Parse response
         plan_data = self._parse_json_response(response_text)
@@ -201,8 +193,8 @@ class ConversationAgent:
             agent_name="ConversationAgent",
             event_type="llm_plan_generation",
             message="Plan generated via LLM",
-            output_payload={"latency_ms": total_latency, "response_length": len(response_text)},
-            latency_ms=total_latency,
+            output_payload={"latency_ms": latency_ms, "response_length": len(response_text)},
+            latency_ms=latency_ms,
         )
 
         return plan_data
@@ -340,6 +332,12 @@ class ConversationAgent:
             if new_summary:
                 state.plan.final_summary = new_summary
 
+        # Capture ad-hoc events so the webhook handler can write them to the calendar (DOPS-8)
+        if action == "add_event":
+            new_event_dict = result.get("new_event") or {}
+            if new_event_dict.get("title"):
+                state.ad_hoc_events.append(new_event_dict)
+
         state.transcript.append({"role": "user", "content": state.user_input})
         state.transcript.append({"role": "assistant", "content": agent_response})
 
@@ -432,6 +430,152 @@ class ConversationAgent:
             )
             return False
 
+    async def create_calendar_events_from_state(
+        self,
+        state: AgentState,
+        calendar_adapters: "list[CalendarAdapter]",
+    ) -> "list[CalendarEvent]":
+        """Create all ad-hoc events captured during the call in each configured adapter.
+
+        For each raw event dict in state.ad_hoc_events, attempts creation on every
+        adapter that reports is_configured(). Successfully created events are appended
+        to state.plan.calendar_events so the post-call summary reflects them.
+
+        Returns:
+            List of CalendarEvent objects that were successfully created.
+        """
+        from app.agents.state import CalendarEvent as _CalendarEvent
+
+        created: list[_CalendarEvent] = []
+
+        for raw in state.ad_hoc_events:
+            title = raw.get("title")
+            if not title:
+                continue
+
+            # Parse times; default end = start + 1h
+            start_time = None
+            end_time = None
+            try:
+                if raw.get("start_time"):
+                    start_time = datetime.fromisoformat(raw["start_time"])
+                if raw.get("end_time"):
+                    end_time = datetime.fromisoformat(raw["end_time"])
+            except (ValueError, TypeError):
+                pass
+
+            if not start_time:
+                await self.debug_logger.log_event(
+                    agent_name="ConversationAgent",
+                    event_type="calendar_event_skipped",
+                    level="warning",
+                    message=f"Skipping ad-hoc event '{title}': no parseable start_time",
+                    input_payload=raw,
+                )
+                continue
+
+            if not end_time:
+                from datetime import timedelta as _td
+                end_time = start_time + _td(hours=1)
+
+            for adapter in calendar_adapters:
+                source = "google_calendar" if "google" in type(adapter).__name__.lower() else "apple_ical"
+                event_to_create = _CalendarEvent(
+                    source=source,
+                    title=title,
+                    start_time=start_time,
+                    end_time=end_time,
+                    location=raw.get("location"),
+                )
+
+                t0 = time.time()
+                try:
+                    if not await adapter.is_configured(state.user_id):
+                        continue
+                    result_event = await adapter.create_event(state.user_id, event_to_create)
+                    latency_ms = int((time.time() - t0) * 1000)
+
+                    if result_event:
+                        created.append(result_event)
+                        if state.plan:
+                            state.plan.calendar_events.append(result_event)
+                        await self.debug_logger.log_event(
+                            agent_name="ConversationAgent",
+                            event_type="calendar_event_created",
+                            message=f"Created '{title}' via {type(adapter).__name__}",
+                            output_payload={"title": title, "external_id": result_event.external_id,
+                                            "adapter": type(adapter).__name__},
+                            latency_ms=latency_ms,
+                        )
+                    else:
+                        await self.debug_logger.log_event(
+                            agent_name="ConversationAgent",
+                            event_type="calendar_event_create_failed",
+                            level="error",
+                            message=f"Failed to create '{title}' via {type(adapter).__name__}",
+                            input_payload=raw,
+                            latency_ms=latency_ms,
+                        )
+                except Exception as e:
+                    await self.debug_logger.log_event(
+                        agent_name="ConversationAgent",
+                        event_type="calendar_event_create_error",
+                        level="error",
+                        message=f"Exception creating '{title}' via {type(adapter).__name__}: {e}",
+                        error=str(e),
+                    )
+
+        return created
+
+    async def generate_post_call_summary(self, state: AgentState) -> str:
+        """Generate a rich post-call summary from the full call context via LLM.
+
+        Reads the complete transcript plus the original pre-call plan data so that
+        user corrections and ad-hoc events mentioned during the call are reflected.
+        Sets state.post_call_summary and overwrites state.plan.final_summary so that
+        a subsequent send_summary() call will use this generated text.
+
+        Returns:
+            Generated summary text.
+        """
+        system_prompt = PostCallSummaryPrompt.system_prompt()
+        user_prompt = PostCallSummaryPrompt.generate_summary_prompt(state)
+
+        start_time = time.time()
+        try:
+            summary_text, _ = await self._call_llm(system_prompt, user_prompt, temperature=0.4)
+        except Exception as e:
+            await self.debug_logger.log_event(
+                agent_name="ConversationAgent",
+                event_type="post_call_summary_error",
+                level="error",
+                message=f"Failed to generate post-call summary via LLM: {e}",
+                error=str(e),
+            )
+            # Fall back to pre-call plan summary so something still gets sent
+            summary_text = (state.plan.final_summary if state.plan and state.plan.final_summary
+                            else "Your daily summary is ready. Have a great day!")
+
+        latency_ms = int((time.time() - start_time) * 1000)
+
+        state.post_call_summary = summary_text
+        if state.plan:
+            state.plan.final_summary = summary_text
+
+        await self.debug_logger.log_event(
+            agent_name="ConversationAgent",
+            event_type="post_call_summary_generated",
+            message="Post-call summary generated",
+            output_payload={
+                "summary_length": len(summary_text),
+                "transcript_turns": len(state.transcript),
+                "latency_ms": latency_ms,
+            },
+            latency_ms=latency_ms,
+        )
+
+        return summary_text
+
     async def generate_confirmation_prompt(self, plan: DailyPlanData) -> str:
         """Generate a natural confirmation question for the user.
 
@@ -450,46 +594,27 @@ class ConversationAgent:
         except Exception:
             return "Does this plan work for you?"
 
+    @observe(name="conversation-agent", capture_input=False, capture_output=False)
     async def run(self, state: AgentState) -> AgentState:
         """Execute conversation agent with LLM-powered plan generation."""
         await self.debug_logger.log_agent_start("ConversationAgent")
 
-        trace = (
-            self.langfuse_tracer.trace_agent("ConversationAgent", state.run_id, state.user_id)
-            if self.langfuse_tracer
-            else None
-        )
+        with propagate_attributes(user_id=state.user_id, session_id=state.run_id):
+            return await self._run_inner(state)
 
+    async def _run_inner(self, state: AgentState) -> AgentState:
         try:
             if not state.plan:
                 raise ValueError("No plan to present")
 
             # Generate plan using LLM
-            start_time = time.time()
             plan_data = await self._generate_plan_with_llm(state)
-            llm_latency = int((time.time() - start_time) * 1000)
 
             # Update state.plan with LLM-generated data
             self._update_plan_from_llm_response(state, plan_data)
 
-            if trace:
-                trace.span(
-                    "generate_plan_llm",
-                    output_data={"has_final_summary": bool(state.plan.final_summary)},
-                    latency_ms=llm_latency,
-                )
-
             # Format plan for speech
-            start_time = time.time()
             speech_text = self._format_plan_for_speech(state.plan)
-            format_latency = int((time.time() - start_time) * 1000)
-
-            if trace:
-                trace.span(
-                    "format_plan",
-                    output_data={"speech_length": len(speech_text)},
-                    latency_ms=format_latency,
-                )
 
             await self.debug_logger.log_event(
                 agent_name="ConversationAgent",
@@ -532,13 +657,6 @@ class ConversationAgent:
             if state.user_input:
                 action, response_text = await self.process_user_input(state)
 
-                if trace:
-                    trace.span(
-                        "process_user_input",
-                        input_data={"user_input": state.user_input},
-                        output_data={"action": action, "response_length": len(response_text)},
-                    )
-
                 await self.debug_logger.log_event(
                     agent_name="ConversationAgent",
                     event_type="user_input_processed",
@@ -546,9 +664,6 @@ class ConversationAgent:
                     input_payload={"user_input": state.user_input},
                     output_payload={"action": action},
                 )
-
-            if trace:
-                trace.end(output_data={"transcript_length": len(state.transcript)})
 
             await self.debug_logger.log_agent_end("ConversationAgent", success=True)
 
@@ -560,10 +675,6 @@ class ConversationAgent:
                 message=f"Conversation error: {str(e)}",
                 error=str(e),
             )
-
-            if trace:
-                trace.end(error=str(e))
-
             await self.debug_logger.log_agent_end("ConversationAgent", success=False)
             state.error = str(e)
 

@@ -13,7 +13,7 @@ sys.path.insert(0, ".")
 # Load .env from project root (one level up from backend/)
 from pathlib import Path
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent.parent / ".env", override=True)
+load_dotenv(Path(__file__).parent / ".env", override=True)
 
 # ── Mock Supabase client ────────────────────────────────────────────────────
 class MockResult:
@@ -96,7 +96,7 @@ async def main():
     langfuse_tracer = LangfuseTracer(
         settings.langfuse_public_key,
         settings.langfuse_secret_key,
-        enabled=False,          # disable real traces for demo
+        enabled=settings.langfuse_enabled,
     )
 
     calendar_adapters = [
@@ -153,6 +153,16 @@ async def main():
     print("\n── DB rows written ─────────────────────────────────────────")
     for tname, tobj in db._tables.items():
         print(f"  {tname}: {len(tobj._rows)} row(s)")
+
+    # Flush Langfuse so all buffered spans are shipped before exit
+    langfuse_tracer.flush()
+    from app.services.langfuse_tracer import LangfuseTracer as _LFT
+    print("\n── Langfuse ────────────────────────────────────────────────")
+    if langfuse_tracer.enabled and langfuse_tracer._client:
+        base_url = langfuse_tracer._client.base_url if hasattr(langfuse_tracer._client, "base_url") else "https://cloud.langfuse.com"
+        print(f"  Traces flushed. View at: {base_url}/traces")
+    else:
+        print("  Langfuse disabled — no traces sent")
 
     print("\n" + "=" * 60)
     return final_state

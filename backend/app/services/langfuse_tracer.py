@@ -1,219 +1,280 @@
-"""Langfuse integration for observability."""
+"""Langfuse tracing for DailyOps AI.
+
+Works with both langfuse >=3.0,<3.8 (Python 3.9) and langfuse >=4.0 (Python 3.10+).
+
+Initialise once via LangfuseTracer(public_key, secret_key).  After that,
+use the re-exported @observe() decorator and propagate_attributes() context
+manager anywhere in the codebase — they route through the same global client.
+"""
 
 import logging
-from typing import Any, Optional
-from datetime import datetime
-
-try:
-    from langfuse import Langfuse
-except ImportError:
-    Langfuse = None
+import os
+from contextlib import contextmanager, nullcontext
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# ── Safe re-exports with fallbacks for missing API surface ────────────────────
+
+try:
+    from langfuse import observe  # type: ignore[import]
+    _LANGFUSE_AVAILABLE = True
+except ImportError:
+    _LANGFUSE_AVAILABLE = False
+
+    def observe(*args, **kwargs):  # type: ignore[misc]
+        """No-op @observe() when Langfuse is not installed."""
+        if len(args) == 1 and callable(args[0]):
+            return args[0]
+
+        def decorator(fn):
+            return fn
+
+        return decorator
+
+
+try:
+    from langfuse import propagate_attributes  # type: ignore[import]
+except (ImportError, AttributeError):
+    # langfuse <4.0 (e.g. 3.7.x on Python 3.9) doesn't have propagate_attributes.
+    # Shim it as a context manager that calls update_current_trace() instead —
+    # semantically equivalent for setting user_id / session_id on the current trace.
+    @contextmanager
+    def propagate_attributes(**kwargs):  # type: ignore[misc]
+        if _LANGFUSE_AVAILABLE:
+            try:
+                from langfuse import get_client  # type: ignore[import]
+                remap = {
+                    "name": kwargs.get("trace_name"),
+                    "user_id": kwargs.get("user_id"),
+                    "session_id": kwargs.get("session_id"),
+                    "version": kwargs.get("version"),
+                    "tags": kwargs.get("tags"),
+                }
+                update_kwargs = {k: v for k, v in remap.items() if v is not None}
+                if update_kwargs:
+                    get_client().update_current_trace(**update_kwargs)
+            except Exception:
+                pass
+        yield
+
+
+# ── Tracer ─────────────────────────────────────────────────────────────────────
+
 
 class LangfuseTracer:
-    """Langfuse tracer for LLM and agent monitoring."""
+    """Thin wrapper around the Langfuse client.
+
+    Responsibilities:
+    - Initialise the global Langfuse client (sets env vars so @observe()
+      picks them up automatically).
+    - Provide backward-compatible trace_agent() / trace_llm_call() helpers
+      for code that still uses the manual observation pattern.
+    - Expose flush() / shutdown() for lifecycle management.
+    """
 
     def __init__(self, public_key: str, secret_key: str, enabled: bool = True):
-        """Initialize Langfuse client.
+        self.enabled = enabled and bool(public_key) and bool(secret_key)
+        self._client = None
 
-        Args:
-            public_key: Langfuse public key
-            secret_key: Langfuse secret key
-            enabled: Enable/disable tracing
-        """
-        self.enabled = enabled
-        self.client = None
-
-        if enabled and public_key and secret_key:
+        if self.enabled:
+            # Populate env vars so get_client() / @observe() find credentials
+            os.environ.setdefault("LANGFUSE_PUBLIC_KEY", public_key)
+            os.environ.setdefault("LANGFUSE_SECRET_KEY", secret_key)
             try:
-                self.client = Langfuse(public_key=public_key, secret_key=secret_key)
-                logger.info("Langfuse tracer initialized")
-            except Exception as e:
-                logger.error(f"Failed to initialize Langfuse: {e}")
+                from langfuse import Langfuse  # type: ignore[import]
+
+                self._client = Langfuse(public_key=public_key, secret_key=secret_key)
+                logger.info("Langfuse tracer initialised")
+            except ImportError:
+                logger.warning("langfuse package not installed — tracing disabled")
                 self.enabled = False
+            except Exception as e:
+                logger.error("Failed to initialise Langfuse: %s", e)
+                self.enabled = False
+
+    # ── Manual observation helpers (backward compat) ───────────────────────────
 
     def trace_agent(
         self,
         agent_name: str,
         run_id: str,
-        user_id: str | None = None,
-    ):
-        """Create a trace for an agent execution.
-
-        Usage:
-            trace = tracer.trace_agent("PlanningAgent", run_id, user_id)
-            trace.span(name="fetch_calendar", input={"date": "2025-01-01"}, output=[...])
-        """
-        if not self.enabled or not self.client:
-            return NoOpTrace()
-
+        user_id: Optional[str] = None,
+    ) -> "LangfuseTrace":
+        """Create a root observation for an agent execution."""
+        if not self.enabled or not self._client:
+            return NoOpTrace()  # type: ignore[return-value]
         try:
-            trace = self.client.trace(
+            obs = self._client.start_observation(
                 name=agent_name,
+                as_type="span",
                 input={"run_id": run_id, "user_id": user_id},
-                metadata={
-                    "agent": agent_name,
-                    "run_id": run_id,
-                    "user_id": user_id,
-                    "timestamp": datetime.utcnow().isoformat(),
-                },
             )
-            return LangfuseTrace(trace, self.client, agent_name)
-        except AttributeError:
-            # Langfuse v4 removed the .trace() API — degrade gracefully
-            logger.warning("Langfuse .trace() not available (v4 SDK?); using no-op tracer")
-            self.enabled = False
-            return NoOpTrace()
+            return LangfuseTrace(obs, agent_name)
+        except Exception as e:
+            logger.debug("Langfuse trace_agent failed: %s", e)
+            return NoOpTrace()  # type: ignore[return-value]
+
+    def trace_llm_call(
+        self,
+        model: str,
+        messages: List[Dict],
+        run_id: str,
+    ) -> "LangfuseGeneration":
+        """Create a generation observation for an LLM call."""
+        if not self.enabled or not self._client:
+            return NoOpTrace()  # type: ignore[return-value]
+        try:
+            obs = self._client.start_observation(
+                name=model,
+                as_type="generation",
+                model=model,
+                input=messages,
+            )
+            return LangfuseGeneration(obs)
+        except Exception as e:
+            logger.debug("Langfuse trace_llm_call failed: %s", e)
+            return NoOpTrace()  # type: ignore[return-value]
 
     def trace_tool_call(
         self,
         tool_name: str,
         run_id: str,
         agent_name: str,
-        input_data: dict[str, Any] | None = None,
-    ):
-        """Create a trace for a tool call."""
-        if not self.enabled or not self.client:
-            return NoOpTrace()
+        input_data: Optional[Dict[str, Any]] = None,
+    ) -> "LangfuseTrace":
+        """Create a span observation for a tool call."""
+        if not self.enabled or not self._client:
+            return NoOpTrace()  # type: ignore[return-value]
+        try:
+            obs = self._client.start_observation(
+                name=f"{agent_name}.{tool_name}",
+                as_type="span",
+                input=input_data,
+            )
+            return LangfuseTrace(obs, tool_name)
+        except Exception as e:
+            logger.debug("Langfuse trace_tool_call failed: %s", e)
+            return NoOpTrace()  # type: ignore[return-value]
 
-        span = self.client.span(
-            name=f"{agent_name}.{tool_name}",
-            input=input_data,
-            metadata={
-                "tool": tool_name,
-                "agent": agent_name,
-                "run_id": run_id,
-                "type": "tool_call",
-            },
-        )
+    # ── Lifecycle ──────────────────────────────────────────────────────────────
 
-        return LangfuseSpan(span)
+    def flush(self) -> None:
+        """Block until all buffered observations are sent."""
+        if self._client:
+            try:
+                self._client.flush()
+            except Exception as e:
+                logger.debug("Langfuse flush failed: %s", e)
 
-    def trace_llm_call(
-        self,
-        model: str,
-        messages: list[dict],
-        run_id: str,
-    ):
-        """Create a trace for an LLM call."""
-        if not self.enabled or not self.client:
-            return NoOpTrace()
+    def shutdown(self) -> None:
+        """Gracefully flush and shut down background threads."""
+        if self._client:
+            try:
+                self._client.shutdown()
+            except Exception as e:
+                logger.debug("Langfuse shutdown failed: %s", e)
 
-        generation = self.client.generation(
-            name=model,
-            model=model,
-            input=messages,
-            metadata={
-                "run_id": run_id,
-                "type": "llm_call",
-                "timestamp": datetime.utcnow().isoformat(),
-            },
-        )
 
-        return LangfuseGeneration(generation)
-
-    def flush(self):
-        """Flush pending traces to Langfuse."""
-        if self.enabled and self.client:
-            self.client.flush()
+# ── Observation wrappers ───────────────────────────────────────────────────────
 
 
 class LangfuseTrace:
-    """Wrapper for Langfuse trace."""
+    """Wrapper for a Langfuse manual span observation."""
 
-    def __init__(self, trace: Any, client: Any, agent_name: str):
-        self.trace = trace
-        self.client = client
-        self.agent_name = agent_name
-        self.spans = []
+    def __init__(self, obs: Any, agent_name: str):
+        self._obs = obs
+        self._agent_name = agent_name
 
     def span(
         self,
         name: str,
-        input_data: dict[str, Any] | None = None,
-        output_data: dict[str, Any] | None = None,
-        error: str | None = None,
-        latency_ms: int | None = None,
-    ):
-        """Add a span to the trace."""
-        span = self.trace.span(
-            name=f"{self.agent_name}.{name}",
-            input=input_data,
-            metadata={
-                "agent": self.agent_name,
-                "step": name,
-                "latency_ms": latency_ms,
-            },
-        )
-
-        if output_data:
-            span.end(output=output_data)
-        elif error:
-            span.end(level="error")
-
-        self.spans.append(span)
-        return span
-
-    def end(self, output_data: dict[str, Any] | None = None, error: str | None = None):
-        """End the trace."""
-        if output_data:
-            self.trace.end(output=output_data)
-        elif error:
-            self.trace.end(level="error")
-        else:
-            self.trace.end()
-
-
-class LangfuseSpan:
-    """Wrapper for Langfuse span."""
-
-    def __init__(self, span: Any):
-        self.span = span
-
-    def end(self, output_data: dict[str, Any] | None = None, error: str | None = None):
-        """End the span."""
-        if output_data:
-            self.span.end(output=output_data)
-        elif error:
-            self.span.end(level="error")
-        else:
-            self.span.end()
-
-
-class LangfuseGeneration:
-    """Wrapper for Langfuse generation."""
-
-    def __init__(self, generation: Any):
-        self.generation = generation
+        input_data: Optional[Dict[str, Any]] = None,
+        output_data: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+        latency_ms: Optional[int] = None,
+    ) -> Any:
+        """Create a child span, update it, and end it immediately."""
+        try:
+            child = self._obs.start_observation(
+                name=f"{self._agent_name}.{name}",
+                as_type="span",
+            )
+            updates: Dict[str, Any] = {}
+            if input_data is not None:
+                updates["input"] = input_data
+            if output_data is not None:
+                updates["output"] = output_data
+            if latency_ms is not None:
+                updates["metadata"] = {"latency_ms": str(latency_ms)}
+            if error:
+                updates["level"] = "ERROR"
+                updates["status_message"] = error[:200]
+            if updates:
+                child.update(**updates)
+            child.end()
+            return child
+        except Exception as e:
+            logger.debug("Langfuse span failed: %s", e)
 
     def end(
         self,
-        completion: str | None = None,
-        tokens_prompt: int | None = None,
-        tokens_completion: int | None = None,
-        cost: float | None = None,
-    ):
-        """End the generation with completion info."""
-        self.generation.end(
-            output=completion,
-            metadata={
-                "tokens_prompt": tokens_prompt,
-                "tokens_completion": tokens_completion,
-                "cost": cost,
-            },
-        )
+        output_data: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+    ) -> None:
+        try:
+            updates: Dict[str, Any] = {}
+            if output_data is not None:
+                updates["output"] = output_data
+            if error:
+                updates["level"] = "ERROR"
+                updates["status_message"] = error[:200]
+            if updates:
+                self._obs.update(**updates)
+            self._obs.end()
+        except Exception as e:
+            logger.debug("Langfuse trace end failed: %s", e)
+
+
+class LangfuseGeneration:
+    """Wrapper for a Langfuse generation observation."""
+
+    def __init__(self, obs: Any):
+        self._obs = obs
+
+    def end(
+        self,
+        completion: Optional[str] = None,
+        tokens_prompt: Optional[int] = None,
+        tokens_completion: Optional[int] = None,
+        cost: Optional[float] = None,
+    ) -> None:
+        try:
+            updates: Dict[str, Any] = {}
+            if completion is not None:
+                updates["output"] = completion
+            if tokens_prompt is not None or tokens_completion is not None:
+                updates["usage_details"] = {
+                    "input_tokens": tokens_prompt or 0,
+                    "output_tokens": tokens_completion or 0,
+                }
+            if cost is not None:
+                updates["metadata"] = {"cost": str(cost)}
+            if updates:
+                self._obs.update(**updates)
+            self._obs.end()
+        except Exception as e:
+            logger.debug("Langfuse generation end failed: %s", e)
 
 
 class NoOpTrace:
-    """No-op trace when Langfuse is disabled."""
+    """Silent no-op when Langfuse is disabled or unavailable."""
 
-    def span(self, *args, **kwargs):
+    def span(self, *args: Any, **kwargs: Any) -> "NoOpTrace":
         return self
 
-    def end(self, *args, **kwargs):
+    def end(self, *args: Any, **kwargs: Any) -> "NoOpTrace":
         return self
 
-    def flush(self):
+    def flush(self) -> None:
         pass

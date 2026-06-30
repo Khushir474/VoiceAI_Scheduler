@@ -18,7 +18,7 @@ from app.adapters.weather import WeatherAdapter
 from app.adapters.maps import MapsAdapter
 from app.services.logger import DebugLogger
 from app.services.calendar_merge import CalendarMerger
-from app.services.langfuse_tracer import LangfuseTracer
+from app.services.langfuse_tracer import LangfuseTracer, observe, propagate_attributes
 from app.services.daily_context import DailyContextService
 
 
@@ -42,6 +42,7 @@ class PlanningAgent:
         self.calendar_merger = CalendarMerger(debug_logger)
         self.daily_context_service = daily_context_service
 
+    @observe(name="fetch-calendar-events", capture_input=False)
     async def _fetch_calendar_events(self, user_id: str, target_date: date) -> list[CalendarEvent]:
         """Fetch calendar events from all configured adapters."""
         await self.debug_logger.log_agent_start("PlanningAgent.fetch_calendar")
@@ -75,6 +76,7 @@ class PlanningAgent:
         await self.debug_logger.log_agent_end("PlanningAgent.fetch_calendar", success=True)
         return deduplicated_events
 
+    @observe(name="fetch-weather", capture_input=False)
     async def _fetch_weather(self, latitude: float = 40.7128, longitude: float = -74.0060) -> WeatherData | None:
         """Fetch weather via cloud API (default: NYC coordinates)."""
         if not self.weather_adapter:
@@ -82,6 +84,7 @@ class PlanningAgent:
 
         return await self.weather_adapter.get_weather(latitude, longitude)
 
+    @observe(name="fetch-commute", capture_input=False)
     async def _fetch_commute(self, from_addr: str, to_addr: str) -> CommuteData | None:
         """Fetch commute via Google Maps API (cloud)."""
         if not self.maps_adapter:
@@ -96,52 +99,30 @@ class PlanningAgent:
             return "You have no events scheduled for today"
         return f"You have {len(event_titles)} events today: {', '.join(event_titles)}"
 
+    @observe(name="planning-agent", capture_input=False, capture_output=False)
     async def run(self, state: AgentState) -> AgentState:
         """Execute the planning agent."""
         await self.debug_logger.log_agent_start("PlanningAgent")
 
-        # Create Langfuse trace
-        trace = self.langfuse_tracer.trace_agent("PlanningAgent", state.run_id, state.user_id) if self.langfuse_tracer else None
+        with propagate_attributes(
+            user_id=state.user_id,
+            session_id=state.run_id,
+            trace_name=f"dailyops-{state.run_id[:8]}",
+        ):
+            return await self._run_inner(state)
 
+    async def _run_inner(self, state: AgentState) -> AgentState:
         try:
             target_date = date.today()
 
             # Fetch calendar events
-            start_time = time.time()
             events = await self._fetch_calendar_events(state.user_id, target_date)
-            calendar_latency = int((time.time() - start_time) * 1000)
-
-            if trace:
-                trace.span(
-                    "fetch_calendar",
-                    input_data={"user_id": state.user_id, "date": target_date.isoformat()},
-                    output_data={"events_count": len(events)},
-                    latency_ms=calendar_latency,
-                )
 
             # Fetch weather
-            start_time = time.time()
             weather = await self._fetch_weather()
-            weather_latency = int((time.time() - start_time) * 1000)
-
-            if trace:
-                trace.span(
-                    "fetch_weather",
-                    output_data={"condition": weather.condition if weather else None},
-                    latency_ms=weather_latency,
-                )
 
             # Fetch commute (TODO: load from user preferences)
-            start_time = time.time()
             commute = await self._fetch_commute("123 Main St, New York, NY", "456 Work Ave, New York, NY")
-            commute_latency = int((time.time() - start_time) * 1000)
-
-            if trace:
-                trace.span(
-                    "fetch_commute",
-                    output_data={"duration_minutes": commute.estimated_duration_minutes if commute else None},
-                    latency_ms=commute_latency,
-                )
 
             # Generate summaries
             calendar_summary = self._generate_calendar_summary(events)
@@ -188,13 +169,6 @@ class PlanningAgent:
                 },
             )
 
-            if trace:
-                trace.end(output_data={
-                    "events_count": len(events),
-                    "has_weather": weather is not None,
-                    "has_commute": commute is not None,
-                })
-
             await self.debug_logger.log_agent_end("PlanningAgent", success=True)
 
         except Exception as e:
@@ -205,10 +179,6 @@ class PlanningAgent:
                 message=f"Failed to generate plan: {str(e)}",
                 error=str(e),
             )
-
-            if trace:
-                trace.end(error=str(e))
-
             await self.debug_logger.log_agent_end("PlanningAgent", success=False)
             state.error = str(e)
 

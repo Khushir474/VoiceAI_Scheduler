@@ -25,7 +25,6 @@ from app.adapters.maps import MapsAdapter
 from app.adapters.voice.vapi import VapiAdapter
 from app.adapters.messaging.router import build_messaging_adapter
 from app.services.logger import DebugLogger
-from app.services.langfuse_tracer import LangfuseTracer
 from app.services.daily_context import DailyContextService
 
 # Configure logging
@@ -40,8 +39,24 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     """Application lifecycle management."""
     logger.info("Starting DailyOps AI backend")
+
+    # Initialise Langfuse so @observe() decorators can find credentials
+    if settings.langfuse_enabled and settings.langfuse_public_key:
+        from app.services.langfuse_tracer import LangfuseTracer as _LFTracer
+        app.state.langfuse = _LFTracer(
+            settings.langfuse_public_key,
+            settings.langfuse_secret_key,
+            enabled=settings.langfuse_enabled,
+        )
+        logger.info("Langfuse initialised for lifetime of application")
+    else:
+        app.state.langfuse = None
+
     yield
+
     logger.info("Shutting down DailyOps AI backend")
+    if getattr(app.state, "langfuse", None):
+        app.state.langfuse.shutdown()
 
 
 # Initialize FastAPI app
@@ -157,6 +172,7 @@ async def wipe_daily_context(db = Depends(get_db)):
 # Test endpoint: Trigger a daily planning run
 @app.post("/api/test-run")
 async def test_run(
+    request: Request,
     user_id: str = "00000000-0000-0000-0000-000000000001",
     db = Depends(get_db),
 ):
@@ -167,12 +183,8 @@ async def test_run(
         # Create debug logger
         debug_logger = DebugLogger(db, run_id, user_id)
 
-        # Initialize Langfuse tracer
-        langfuse_tracer = LangfuseTracer(
-            settings.langfuse_public_key,
-            settings.langfuse_secret_key,
-            enabled=settings.langfuse_enabled,
-        )
+        # Reuse the app-level Langfuse tracer (already initialised in lifespan)
+        langfuse_tracer = getattr(request.app.state, "langfuse", None)
 
         # Initialize adapters
         calendar_adapters = [
@@ -263,8 +275,9 @@ async def test_run(
                 db_errors.append(f"evaluation_scores: {e}")
                 logger.warning(f"Failed to persist evaluation_scores: {e}")
 
-        # Flush Langfuse traces
-        langfuse_tracer.flush()
+        # Flush Langfuse traces for this run (global client handles buffering)
+        if langfuse_tracer:
+            langfuse_tracer.flush()
 
         return {
             "run_id": run_id,

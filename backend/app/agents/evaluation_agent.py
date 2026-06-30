@@ -19,7 +19,7 @@ from typing import Optional
 
 from app.agents.state import AgentState
 from app.services.logger import DebugLogger
-from app.services.langfuse_tracer import LangfuseTracer
+from app.services.langfuse_tracer import LangfuseTracer, observe, propagate_attributes
 
 
 # Patterns that indicate placeholder or AI-generated filler in plan text
@@ -342,46 +342,29 @@ class EvaluationAgent:
 
     # ─── Main entry point ─────────────────────────────────────────────────────
 
+    @observe(name="evaluation-agent", capture_input=False, capture_output=False)
     async def run(self, state: AgentState) -> AgentState:
         """Execute evaluation: score, flag issues, persist, update state."""
         await self.debug_logger.log_agent_start("EvaluationAgent")
 
-        trace = (
-            self.langfuse_tracer.trace_agent("EvaluationAgent", state.run_id, state.user_id)
-            if self.langfuse_tracer
-            else None
-        )
+        with propagate_attributes(user_id=state.user_id, session_id=state.run_id):
+            return await self._run_inner(state)
 
+    async def _run_inner(self, state: AgentState) -> AgentState:
         try:
             scores = EvaluationScores()
 
             # --- Data coverage ---
-            t0 = time.time()
             scores.data_coverage, coverage_checks = self._score_data_coverage(state)
-            coverage_ms = int((time.time() - t0) * 1000)
-            if trace:
-                trace.span("data_coverage", output_data=coverage_checks, latency_ms=coverage_ms)
 
             # --- Plan completeness ---
-            t0 = time.time()
             scores.plan_completeness, completeness_checks = self._score_plan_completeness(state)
-            completeness_ms = int((time.time() - t0) * 1000)
-            if trace:
-                trace.span("plan_completeness", output_data=completeness_checks, latency_ms=completeness_ms)
 
             # --- Conversation quality ---
-            t0 = time.time()
             scores.conversation_quality, quality_details = self._score_conversation_quality(state)
-            quality_ms = int((time.time() - t0) * 1000)
-            if trace:
-                trace.span("conversation_quality", output_data=quality_details, latency_ms=quality_ms)
 
             # --- User engagement ---
-            t0 = time.time()
             scores.user_engagement, engagement_details = self._score_user_engagement(state)
-            engagement_ms = int((time.time() - t0) * 1000)
-            if trace:
-                trace.span("user_engagement", output_data=engagement_details, latency_ms=engagement_ms)
 
             # --- Aggregate ---
             overall = scores.compute_overall()
@@ -422,9 +405,6 @@ class EvaluationAgent:
                 output_payload=debug_summary,
             )
 
-            if trace:
-                trace.end(output_data=debug_summary)
-
             await self.debug_logger.log_agent_end("EvaluationAgent", success=True)
 
         except Exception as e:
@@ -435,8 +415,6 @@ class EvaluationAgent:
                 message=f"Evaluation error: {e}",
                 error=str(e),
             )
-            if trace:
-                trace.end(error=str(e))
             await self.debug_logger.log_agent_end("EvaluationAgent", success=False)
             state.error = str(e)
 
