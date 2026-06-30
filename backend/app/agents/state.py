@@ -80,6 +80,12 @@ class DailyPlanData(BaseModel):
     extra_user_plans: str = ""
     final_summary: str = ""
 
+    # Location context — populated by LocationService at call-start, never hardcoded
+    user_timezone: str = "UTC"   # IANA tz name, e.g. "America/Chicago"
+    user_city: str = ""          # Display name, e.g. "Chicago, IL"
+    user_lat: float | None = None
+    user_lng: float | None = None
+
 
 class AgentState(BaseModel):
     """Shared state across all agents in the graph."""
@@ -114,3 +120,8 @@ class AgentState(BaseModel):
     error_count: int = 0
     error_recovery_attempts: int = 0
     call_duration_seconds: int | None = None
+
+    # Post-call tracking (DOPS-22)
+    ad_hoc_events: list[dict[str, Any]] = Field(default_factory=list)
+    user_corrections: list[str] = Field(default_factory=list)
+    post_call_summary: str = ""

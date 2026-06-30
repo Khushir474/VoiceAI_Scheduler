@@ -10,14 +10,14 @@
   "done_at": null,
   "evidence_refs": [],
   "id": "task_01KWABYT1GWA2RMSQV7Q0H7MKD",
-  "last_event_id": "ev_01KWACA4KTXN2PEB2PPE8DVYGN",
-  "last_status_changed_at": "2026-06-29T18:58:36Z",
+  "last_event_id": "ev_01KWAF5XN0Y02H9NXTF6ZATTJY",
+  "last_status_changed_at": "2026-06-29T19:54:55Z",
   "priority": "high",
   "relationships_out": [],
   "reopened_count": 0,
   "schema_version": 1,
   "short_id": "DOPS-9",
-  "status": "backlog",
+  "status": "in_planning",
   "tags": [
     "commute",
     "planning",
@@ -26,6 +26,6 @@
   ],
   "title": "Smart commute planning (work vs in-person vs virtual)",
   "type": "task",
-  "updated_at": "2026-06-29T19:04:47Z",
+  "updated_at": "2026-06-29T19:54:55Z",
   "urgency": null
 }

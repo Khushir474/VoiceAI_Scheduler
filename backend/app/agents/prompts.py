@@ -1,5 +1,7 @@
 """Structured prompts for plan generation and conversation."""
 
+from __future__ import annotations
+
 from app.agents.state import DailyPlanData, AgentState
 import json
 
@@ -108,36 +110,89 @@ Respond with ONLY a valid JSON object (no markdown, no extra text) with this str
         return prompt
 
     @staticmethod
-    def user_input_processing_prompt(user_input: str, current_plan: DailyPlanData) -> str:
-        """Generate a prompt for processing user input and updating the plan."""
-        return f"""The user just said: "{user_input}"
+    def user_input_processing_prompt(
+        user_input: str,
+        current_plan: DailyPlanData,
+    ) -> str:
+        """Generate a prompt for processing user input with full local context.
 
-Current plan summary:
-- {current_plan.calendar_summary}
-- {current_plan.weather_summary}
-- {current_plan.final_summary}
+        Timezone and city come from current_plan, which is populated by LocationService
+        at call-start. No hardcoded values here.
+        """
+        from datetime import datetime, timezone
+        import zoneinfo
 
-Based on their input, determine if they're:
-1. Providing missing events (e.g., "I have a dentist appointment at 2pm")
-2. Confirming they understood the plan
-3. Asking for clarification
-4. Declining a recommendation
+        user_timezone = current_plan.user_timezone or "UTC"
+        user_city = current_plan.user_city or "Unknown location"
 
-If they mentioned an event, extract it and provide an updated plan.
-Otherwise, acknowledge their input and confirm next steps.
+        try:
+            tz = zoneinfo.ZoneInfo(user_timezone)
+        except Exception:
+            tz = timezone.utc
 
-Respond with JSON:
+        now_local = datetime.now(tz)
+        local_time_str = now_local.strftime("%A, %B %-d %Y %-I:%M %p %Z")   # e.g. "Tuesday, July 1 2026 8:42 AM CDT"
+        today_date = now_local.strftime("%Y-%m-%d")
+        utc_offset = now_local.strftime("%z")                                # e.g. "-0500"
+        utc_offset_colon = f"{utc_offset[:3]}:{utc_offset[3:]}"             # e.g. "-05:00"
+
+        # Remaining events today (start_time after now)
+        remaining = [
+            e for e in current_plan.calendar_events
+            if e.start_time.astimezone(tz) > now_local
+        ] if current_plan.calendar_events else []
+        events_str = "\n".join(
+            f"  - {e.start_time.astimezone(tz).strftime('%-I:%M %p')}: {e.title}"
+            + (f" at {e.location}" if e.location else "")
+            for e in remaining
+        ) or "  (none remaining today)"
+
+        # Weather snapshot
+        w = current_plan.weather
+        weather_str = (
+            f"{w.condition}, {w.temperature_high}°F high / {w.temperature_low}°F low, "
+            f"{w.precipitation_probability}% rain"
+        ) if w else current_plan.weather_summary or "unknown"
+
+        return f"""## User context
+Location : {user_city}
+Local time: {local_time_str}
+Weather   : {weather_str}
+
+## Remaining events today
+{events_str}
+
+## The user just said
+"{user_input}"
+
+## Your task
+Classify the input and respond in JSON. Actions:
+- "add_event"  — user mentioned something to add to the calendar
+- "confirm"    — user approved the plan / said yes / said they're good
+- "clarify"    — user asked a question or said something ambiguous
+- "decline"    — user rejected a recommendation
+
+### Time rules for add_event
+All times MUST be ISO 8601 with the user's UTC offset ({utc_offset_colon}), e.g. "{today_date}T14:00:00{utc_offset_colon}".
+- Use the EXACT time the user stated ("at 2pm" → 14:00 local = "{today_date}T14:00:00{utc_offset_colon}").
+- "tonight" / "this evening" → 18:00 local today.
+- "tomorrow morning" → 09:00 next day. "tomorrow afternoon" → 14:00 next day.
+- No time stated → 12:00 local today.
+- end_time = start_time + 1 hour unless the user specified a duration.
+- NEVER output start_time as null when action is "add_event".
+
+Respond with JSON only — no markdown, no code fences:
 {{
   "action": "add_event" | "confirm" | "clarify" | "decline",
   "new_event": {{
-    "title": "string or null",
-    "start_time": "ISO 8601 or null",
-    "end_time": "ISO 8601 or null",
+    "title": "string",
+    "start_time": "ISO 8601 with UTC offset — REQUIRED for add_event",
+    "end_time": "ISO 8601 with UTC offset — REQUIRED for add_event",
     "location": "string or null"
   }} | null,
-  "response": "string - Natural language response to user",
+  "response": "string - natural language reply to user",
   "updated_plan": {{
-    "final_summary": "string - Updated plan summary"
+    "final_summary": "string - updated plan summary including the new event"
   }} | null
 }}"""
 
@@ -175,3 +230,89 @@ Respond with JSON:
   "acknowledgment": "string - Acknowledge their feedback",
   "action_items": ["item1", "item2", ...]
 }}"""
+
+
+class PostCallSummaryPrompt:
+    """Prompts for generating a post-call summary using the full call context."""
+
+    @staticmethod
+    def system_prompt() -> str:
+        return (
+            "You are DailyOps AI generating a post-call daily summary. "
+            "You have access to everything: the pre-fetched calendar, weather, and commute data, "
+            "plus the complete call transcript showing what the user actually said. "
+            "Produce a concise, friendly summary that reflects ALL of this — "
+            "including any events or corrections the user mentioned during the call. "
+            "The summary will be sent as an SMS/iMessage."
+        )
+
+    @staticmethod
+    def generate_summary_prompt(state: AgentState) -> str:
+        plan = state.plan
+
+        # Calendar section
+        if plan and plan.calendar_events:
+            cal_lines = [
+                "- {title} at {time}{loc}".format(
+                    title=e.title,
+                    time=e.start_time.strftime("%I:%M %p"),
+                    loc=f" ({e.location})" if e.location else "",
+                )
+                for e in plan.calendar_events
+            ]
+            calendar_section = "\n".join(cal_lines)
+        elif plan and plan.calendar_summary:
+            calendar_section = plan.calendar_summary
+        else:
+            calendar_section = "None fetched"
+
+        weather_section = (plan.weather_summary if plan and plan.weather_summary else "Not available")
+        commute_section = (plan.commute_summary if plan and plan.commute_summary else "Not available")
+
+        leave_section = "Not set"
+        if plan and plan.leave_time:
+            leave_section = plan.leave_time.strftime("%I:%M %p")
+
+        carry_section = (", ".join(plan.carry_items) if plan and plan.carry_items else "None noted")
+
+        workout_section = "None recommended"
+        if plan and plan.workout_recommendation:
+            wr = plan.workout_recommendation
+            workout_section = f"{wr.duration_minutes} min in the {wr.recommended_time}"
+
+        # Transcript section
+        if state.transcript:
+            transcript_lines = [
+                f"{t.get('role', 'unknown').capitalize()}: {t.get('content', '')}"
+                for t in state.transcript
+                if t.get("content")
+            ]
+            transcript_section = "\n".join(transcript_lines)
+        else:
+            transcript_section = "No transcript available"
+
+        return f"""Generate a post-call daily summary using ALL the context below.
+
+## Pre-Call Plan
+Calendar Events:
+{calendar_section}
+
+Weather: {weather_section}
+Commute: {commute_section}
+Suggested Leave Time: {leave_section}
+Items to Bring: {carry_section}
+Workout: {workout_section}
+
+## Full Call Transcript
+{transcript_section}
+
+## Instructions
+1. Start with "Good morning! Here's your DailyOps summary:"
+2. List ALL calendar events — original ones AND any the user mentioned during the call
+3. Reflect any corrections the user made (e.g., changed times, cancelled events)
+4. Include weather and commute info
+5. Include leave time and carry items
+6. Mention workout if applicable
+7. Keep it under 280 words; plain text, SMS-friendly (light emoji OK)
+
+Write ONLY the summary text — no JSON, no markdown, no extra commentary."""

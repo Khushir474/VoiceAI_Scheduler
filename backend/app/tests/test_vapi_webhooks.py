@@ -514,3 +514,309 @@ class TestEndOfCallReport:
 
         assert captured_state.get("plan") is not None
         assert captured_state["plan"].calendar_summary == "Team standup at 9am"
+
+
+# ─── DOPS-22: Post-call summary from full call context ───────────────────────
+
+class TestDOPS22PostCallSummary:
+    """DOPS-22: summary is generated from full call context and sent after call ends."""
+
+    @pytest.fixture
+    def supabase(self):
+        sb = MagicMock()
+        resp = MagicMock()
+        resp.data = []
+        chain = MagicMock()
+        chain.execute = AsyncMock(return_value=resp)
+        sb.table.return_value.insert.return_value = chain
+        sb.table.return_value.update.return_value.eq.return_value = chain
+        sb.table.return_value.select.return_value.eq.return_value = chain
+        return sb
+
+    @pytest.fixture
+    def settings(self):
+        s = MagicMock()
+        s.llm_provider = "anthropic"
+        s.user_phone_number = ""
+        s.imessage_bridge_url = ""
+        return s
+
+    def _message(self, transcript="", ended_reason="assistant-ended-call", duration=300):
+        return {
+            "call": {
+                "id": "call_dops22",
+                "customData": {"run_id": "run_dops22", "user_id": "user_test"},
+                "endedReason": ended_reason,
+            },
+            "transcript": transcript,
+            "durationSeconds": duration,
+            "endedReason": ended_reason,
+            "summary": "",
+        }
+
+    @pytest.mark.asyncio
+    async def test_generate_post_call_summary_called_on_normal_end(
+        self, supabase, settings
+    ):
+        """generate_post_call_summary is called when call ends normally."""
+        from app.api.vapi_webhooks import _handle_end_of_call_report
+        from app.agents.conversation_agent import ConversationAgent
+
+        with patch.object(
+            ConversationAgent, "generate_post_call_summary", new=AsyncMock(return_value="Full summary")
+        ) as mock_gen:
+            await _handle_end_of_call_report(self._message(), supabase, settings)
+            mock_gen.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_summary_skipped_for_failed_call_reason(self, supabase, settings):
+        """Summary is NOT generated when call failed (e.g. assistant-error)."""
+        from app.api.vapi_webhooks import _handle_end_of_call_report
+        from app.agents.conversation_agent import ConversationAgent
+
+        with patch.object(
+            ConversationAgent, "generate_post_call_summary", new=AsyncMock(return_value="Full summary")
+        ) as mock_gen:
+            result = await _handle_end_of_call_report(
+                self._message(ended_reason="assistant-error"), supabase, settings
+            )
+            mock_gen.assert_not_called()
+            assert result["summary_sent"] is False
+            assert result["post_call_summary_generated"] is False
+
+    @pytest.mark.asyncio
+    async def test_summary_skipped_for_did_not_answer(self, supabase, settings):
+        """Summary is NOT generated when customer did not answer."""
+        from app.api.vapi_webhooks import _handle_end_of_call_report
+        from app.agents.conversation_agent import ConversationAgent
+
+        with patch.object(
+            ConversationAgent, "generate_post_call_summary", new=AsyncMock()
+        ) as mock_gen:
+            result = await _handle_end_of_call_report(
+                self._message(ended_reason="customer-did-not-answer"), supabase, settings
+            )
+            mock_gen.assert_not_called()
+            assert result["post_call_summary_generated"] is False
+
+    @pytest.mark.asyncio
+    async def test_response_includes_post_call_summary_generated_flag(
+        self, supabase, settings
+    ):
+        """Response dict has post_call_summary_generated key."""
+        from app.api.vapi_webhooks import _handle_end_of_call_report
+        from app.agents.conversation_agent import ConversationAgent
+
+        with patch.object(
+            ConversationAgent, "generate_post_call_summary", new=AsyncMock(return_value="ok")
+        ):
+            result = await _handle_end_of_call_report(self._message(), supabase, settings)
+        assert "post_call_summary_generated" in result
+        assert result["post_call_summary_generated"] is True
+
+    @pytest.mark.asyncio
+    async def test_summary_sent_after_generation(self, supabase, settings):
+        """SMS is sent using the LLM-generated summary, not just the pre-call plan."""
+        from app.api.vapi_webhooks import _handle_end_of_call_report
+        from app.agents.conversation_agent import ConversationAgent
+
+        settings.user_phone_number = "+15555550100"
+        settings.imessage_bridge_url = ""
+        settings.twilio_account_sid = "AC"
+        settings.twilio_auth_token = "tok"
+        settings.twilio_phone_number = "+1555"
+
+        transcript = [
+            {"role": "user", "message": "I also have a dentist at 4pm"},
+        ]
+
+        with (
+            patch.object(
+                ConversationAgent, "generate_post_call_summary",
+                new=AsyncMock(return_value="Full post-call summary with dentist")
+            ),
+            patch.object(ConversationAgent, "send_summary", new=AsyncMock(return_value=True)),
+            patch("app.adapters.messaging.twilio_sms.TwilioSMSAdapter"),
+        ):
+            result = await _handle_end_of_call_report(
+                self._message(transcript=transcript), supabase, settings
+            )
+        assert result["summary_sent"] is True
+
+    @pytest.mark.asyncio
+    async def test_user_corrections_visible_in_transcript(self, supabase, settings):
+        """Full transcript (including user corrections) is in state when summary is generated."""
+        from app.api.vapi_webhooks import _handle_end_of_call_report
+        from app.agents.conversation_agent import ConversationAgent
+
+        transcript = [
+            {"role": "assistant", "message": "Your standup is at 9am."},
+            {"role": "user", "message": "Actually it moved to 10am."},
+        ]
+
+        captured = {}
+
+        async def capture_gen(self_ref, state):
+            captured["transcript"] = state.transcript
+            return "summary"
+
+        with patch.object(ConversationAgent, "generate_post_call_summary", new=capture_gen):
+            await _handle_end_of_call_report(
+                self._message(transcript=transcript), supabase, settings
+            )
+
+        # Transcript has at least the two parsed turns; process_user_input may add more
+        assert len(captured.get("transcript", [])) >= 2
+        roles = {t["role"] for t in captured["transcript"]}
+        assert "user" in roles and "assistant" in roles
+        # The user's correction should be in the transcript
+        contents = " ".join(t.get("content", "") for t in captured["transcript"])
+        assert "10am" in contents or "moved" in contents.lower()
+
+    @pytest.mark.asyncio
+    async def test_summary_generation_error_does_not_crash_handler(
+        self, supabase, settings
+    ):
+        """If generate_post_call_summary raises, handler still returns ok."""
+        from app.api.vapi_webhooks import _handle_end_of_call_report
+        from app.agents.conversation_agent import ConversationAgent
+
+        with patch.object(
+            ConversationAgent, "generate_post_call_summary",
+            new=AsyncMock(side_effect=Exception("LLM down"))
+        ):
+            result = await _handle_end_of_call_report(self._message(), supabase, settings)
+        assert result["status"] == "ok"
+        assert result["post_call_summary_generated"] is False
+
+
+# ─── DOPS-8: calendar event creation from webhook ────────────────────────────
+
+class TestDOPS8CalendarEventCreation:
+    """DOPS-8: ad-hoc events mentioned during call are created post-call."""
+
+    @pytest.fixture
+    def supabase(self):
+        sb = MagicMock()
+        resp = MagicMock()
+        resp.data = []
+        chain = MagicMock()
+        chain.execute = AsyncMock(return_value=resp)
+        sb.table.return_value.insert.return_value = chain
+        sb.table.return_value.update.return_value.eq.return_value = chain
+        sb.table.return_value.select.return_value.eq.return_value = chain
+        return sb
+
+    @pytest.fixture
+    def settings(self):
+        s = MagicMock()
+        s.llm_provider = "anthropic"
+        s.user_phone_number = ""
+        s.imessage_bridge_url = ""
+        s.apple_ical_caldav_url = None
+        s.apple_ical_username = None
+        s.apple_ical_password = None
+        return s
+
+    def _message(self, transcript="", ended_reason="assistant-ended-call"):
+        return {
+            "call": {
+                "id": "call_dops8",
+                "customData": {"run_id": "run_dops8", "user_id": "user_test"},
+                "endedReason": ended_reason,
+            },
+            "transcript": transcript,
+            "durationSeconds": 240,
+            "endedReason": ended_reason,
+            "summary": "",
+        }
+
+    @pytest.mark.asyncio
+    async def test_create_calendar_events_called_when_ad_hoc_events_present(
+        self, supabase, settings
+    ):
+        """create_calendar_events_from_state is called when state has ad_hoc_events."""
+        from app.api.vapi_webhooks import _handle_end_of_call_report
+        from app.agents.conversation_agent import ConversationAgent
+        import json as _json
+
+        transcript = [
+            {"role": "user", "message": "I also have a dentist at 3pm"},
+        ]
+
+        # Seed ad_hoc_events by pre-populating via mocked process_user_input
+        async def fake_process_input(self_ref, state):
+            state.ad_hoc_events.append({
+                "title": "Dentist",
+                "start_time": "2026-06-29T15:00:00+00:00",
+                "end_time": "2026-06-29T16:00:00+00:00",
+            })
+            return ("add_event", "Got it, I'll add that.")
+
+        with (
+            patch.object(ConversationAgent, "process_user_input", new=fake_process_input),
+            patch.object(ConversationAgent, "create_calendar_events_from_state",
+                         new=AsyncMock(return_value=[])) as mock_create,
+            patch.object(ConversationAgent, "generate_post_call_summary",
+                         new=AsyncMock(return_value="summary")),
+        ):
+            await _handle_end_of_call_report(
+                self._message(transcript=transcript), supabase, settings
+            )
+            mock_create.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_events_created_count_in_response(self, supabase, settings):
+        """Webhook response includes events_created count."""
+        from app.api.vapi_webhooks import _handle_end_of_call_report
+        from app.agents.conversation_agent import ConversationAgent
+        from app.agents.state import CalendarEvent
+        from datetime import timezone as _tz
+
+        now = datetime.now(_tz.utc)
+        fake_created = [CalendarEvent(
+            source="google_calendar",
+            title="Dentist",
+            start_time=now,
+            end_time=now,
+        )]
+
+        async def fake_process_input(self_ref, state):
+            state.ad_hoc_events.append({"title": "Dentist",
+                                         "start_time": now.isoformat()})
+            return ("add_event", "Added!")
+
+        with (
+            patch.object(ConversationAgent, "process_user_input", new=fake_process_input),
+            patch.object(ConversationAgent, "create_calendar_events_from_state",
+                         new=AsyncMock(return_value=fake_created)),
+            patch.object(ConversationAgent, "generate_post_call_summary",
+                         new=AsyncMock(return_value="summary")),
+        ):
+            result = await _handle_end_of_call_report(
+                self._message(transcript=[{"role": "user", "message": "dentist at 3pm"}]),
+                supabase,
+                settings,
+            )
+
+        assert "events_created" in result
+        assert result["events_created"] == 1
+
+    @pytest.mark.asyncio
+    async def test_no_ad_hoc_events_skips_create_call(self, supabase, settings):
+        """When no ad_hoc_events are in state, create_calendar_events_from_state is not called."""
+        from app.api.vapi_webhooks import _handle_end_of_call_report
+        from app.agents.conversation_agent import ConversationAgent
+
+        with (
+            patch.object(ConversationAgent, "generate_post_call_summary",
+                         new=AsyncMock(return_value="summary")),
+            patch.object(ConversationAgent, "create_calendar_events_from_state",
+                         new=AsyncMock(return_value=[])) as mock_create,
+        ):
+            await _handle_end_of_call_report(
+                self._message(transcript=[]),  # no user turns → no ad_hoc_events
+                supabase,
+                settings,
+            )
+            mock_create.assert_not_called()

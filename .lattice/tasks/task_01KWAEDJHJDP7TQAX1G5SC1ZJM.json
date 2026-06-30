@@ -1,0 +1,32 @@
+{
+  "assigned_to": null,
+  "branch_links": [],
+  "comment_count": 0,
+  "complexity": "low",
+  "created_at": "2026-06-29T19:41:37Z",
+  "created_by": "human:khushi",
+  "custom_fields": {},
+  "description": "The end-of-call iMessage/SMS summary needs a content and formatting cleanup. Current _format_plan_for_sms() output is functional but likely cluttered, inconsistent, or hard to scan on a phone screen. Audit and fix: (1) remove redundant or verbose sections; (2) ensure consistent emoji usage and section headers; (3) tighten copy \u2014 each line should be scannable in 2 seconds; (4) logical ordering (time-ordered events, then leave time, then carry items, then workout); (5) handle edge cases cleanly (no events, no commute, virtual-only day); (6) test on real phone screen for readability. Touches: agents/conversation_agent.py (_format_plan_for_sms), agents/prompts.py. Acceptance: Summary fits comfortably on a phone screen without scrolling for a typical day; sections are clearly separated; no duplicate info; edge cases render cleanly; reviewed against a real SMS output.",
+  "done_at": null,
+  "evidence_refs": [],
+  "id": "task_01KWAEDJHJDP7TQAX1G5SC1ZJM",
+  "last_event_id": "ev_01KWAEDJHKZSQABBWVJ737XW7M",
+  "last_status_changed_at": "2026-06-29T19:41:37Z",
+  "priority": "medium",
+  "relationships_out": [],
+  "reopened_count": 0,
+  "schema_version": 1,
+  "short_id": "DOPS-21",
+  "status": "backlog",
+  "tags": [
+    "summary",
+    "messaging",
+    "ux",
+    "cleanup",
+    "phase4"
+  ],
+  "title": "Clean up summary message formatting and content",
+  "type": "chore",
+  "updated_at": "2026-06-29T19:41:37Z",
+  "urgency": null
+}

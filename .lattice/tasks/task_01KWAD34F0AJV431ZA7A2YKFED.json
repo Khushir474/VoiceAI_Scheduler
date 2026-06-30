@@ -10,14 +10,14 @@
   "done_at": null,
   "evidence_refs": [],
   "id": "task_01KWAD34F0AJV431ZA7A2YKFED",
-  "last_event_id": "ev_01KWAD34F1HD8F0YPMHB072KPX",
-  "last_status_changed_at": "2026-06-29T19:18:26Z",
+  "last_event_id": "ev_01KWC522D2T7Y0KFKSC9JHF9BC",
+  "last_status_changed_at": "2026-06-30T11:36:31Z",
   "priority": "high",
   "relationships_out": [],
   "reopened_count": 0,
   "schema_version": 1,
   "short_id": "DOPS-18",
-  "status": "backlog",
+  "status": "in_planning",
   "tags": [
     "conversation",
     "weather",
@@ -27,6 +27,6 @@
   ],
   "title": "Max handles off-calendar event updates with follow-up questions and contextual suggestions",
   "type": "task",
-  "updated_at": "2026-06-29T19:18:26Z",
+  "updated_at": "2026-06-30T11:36:31Z",
   "urgency": null
 }

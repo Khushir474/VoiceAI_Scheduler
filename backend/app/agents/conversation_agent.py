@@ -294,7 +294,8 @@ class ConversationAgent:
 
         system_prompt = PlanGenerationPrompt.system_prompt()
         user_prompt = PlanGenerationPrompt.user_input_processing_prompt(
-            state.user_input, state.plan
+            state.user_input,
+            state.plan,
         )
 
         start_time = time.time()
@@ -453,14 +454,20 @@ class ConversationAgent:
             if not title:
                 continue
 
-            # Parse times; default end = start + 1h
+            # Parse times; default end = start + 1h.
+            # Coerce naive datetimes to UTC — GCal rejects timezone-less dateTime strings.
+            from datetime import timezone as _tz
             start_time = None
             end_time = None
             try:
                 if raw.get("start_time"):
                     start_time = datetime.fromisoformat(raw["start_time"])
+                    if start_time.tzinfo is None:
+                        start_time = start_time.replace(tzinfo=_tz.utc)
                 if raw.get("end_time"):
                     end_time = datetime.fromisoformat(raw["end_time"])
+                    if end_time.tzinfo is None:
+                        end_time = end_time.replace(tzinfo=_tz.utc)
             except (ValueError, TypeError):
                 pass
 

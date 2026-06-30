@@ -10,14 +10,14 @@
   "done_at": null,
   "evidence_refs": [],
   "id": "task_01KWAE5H37WC0SY0N1EJ742WJQ",
-  "last_event_id": "ev_01KWAE5H38WG14BQP6CR76Y1P4",
-  "last_status_changed_at": "2026-06-29T19:37:13Z",
+  "last_event_id": "ev_01KWAF8PVP4JJ5YK37Q3QSP0WG",
+  "last_status_changed_at": "2026-06-29T19:56:26Z",
   "priority": "high",
   "relationships_out": [],
   "reopened_count": 0,
   "schema_version": 1,
   "short_id": "DOPS-20",
-  "status": "backlog",
+  "status": "in_planning",
   "tags": [
     "summary",
     "conversation",
@@ -26,6 +26,6 @@
   ],
   "title": "Include user-mentioned off-calendar events in end-of-call summary plan",
   "type": "task",
-  "updated_at": "2026-06-29T19:37:13Z",
+  "updated_at": "2026-06-29T19:56:26Z",
   "urgency": null
 }

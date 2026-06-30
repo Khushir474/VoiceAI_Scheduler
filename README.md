@@ -53,23 +53,34 @@ Key features:
 
 ## Running Locally
 
+Two terminals. That's it.
+
+**Terminal 1 — iMessage bridge** (keep open for the duration)
 ```bash
-# 1. DB setup (first time only)
-python scripts/setup_db.py
-
-# 2. Start the backend
-./scripts/run.sh
-
-# 3. (Separate terminal) Expose the tool endpoint to Vapi via ngrok
-ngrok http 8888
-# Copy the https URL → set VAPI_TOOL_SERVER_URL=https://<id>.ngrok-free.app/api/daily-context in backend/.env
-# Restart the server after updating .env
-
-# 4. Trigger a call
-curl -X POST 'http://localhost:8888/api/test-run?user_id=<your-user-id>'
+python imessage_bridge.py
 ```
 
-> **Why ngrok?** Vapi calls `POST /api/daily-context` mid-call so Max can fetch the day's plan live. This endpoint must be publicly reachable by Vapi's servers — ngrok provides that tunnel for local dev. In production, set `VAPI_TOOL_SERVER_URL` to your Railway/Fly.io URL.
+**Terminal 2 — full stack**
+```bash
+bash scripts/run.sh
+```
+
+`run.sh` handles everything automatically: starts a fresh ngrok tunnel, patches `VAPI_TOOL_SERVER_URL` in `backend/.env`, starts the FastAPI backend, triggers a planning run, and stays alive so Vapi can POST tool calls back mid-call.
+
+> **Why ngrok?** Vapi calls `POST /api/daily-context` mid-call so Max can fetch today's plan live. That endpoint must be publicly reachable — ngrok provides the tunnel for local dev. In production, set `VAPI_TOOL_SERVER_URL` to your Railway/Fly.io URL.
+
+### Useful one-liners
+
+```bash
+# Trigger a run manually (bridge + server already running)
+curl -s -X POST http://localhost:8888/api/test-run | python3 -m json.tool
+
+# Watch server logs live
+tail -f /tmp/dailyops_server.log
+
+# Health check
+curl http://localhost:8888/health
+```
 
 ---
 
@@ -284,33 +295,22 @@ curl -X POST 'http://localhost:8888/api/test-run?user_id=<your-user-id>'
 ## 🚀 Quick Start (5 minutes)
 
 ```bash
-# 1. Backend setup
-cd backend
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+# 1. Install backend deps
+cd backend && pip install -r requirements.txt && cd ..
 
-# 2. Configure
-cp ../.env.template ../.env
-# Edit .env with your API keys (see setup status below)
+# 2. Configure (fill in your API keys)
+cp .env.template backend/.env
 
-# 3. Start backend
-python -m app.main
-# Server runs at http://localhost:8000
+# 3. Terminal 1 — iMessage bridge
+python imessage_bridge.py
 
-# 4. In another terminal, start frontend
-cd frontend
-npm install
-npm run dev
-# Frontend runs at http://localhost:3000
-
-# 5. Test
-curl -X POST http://localhost:8000/api/test-run
+# 4. Terminal 2 — backend + ngrok + trigger
+bash scripts/run.sh
 ```
 
-Then visit http://localhost:3000 to see the dashboard!
+Max will call your phone. After the briefing you'll receive an iMessage summary.
 
-See **[QUICKSTART.md](QUICKSTART.md)** for detailed instructions.
+See **[QUICKSTART.md](QUICKSTART.md)** for first-time API setup (Google Calendar OAuth, Vapi, weather, etc.).
 
 ---
 

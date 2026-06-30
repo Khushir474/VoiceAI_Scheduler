@@ -18,7 +18,9 @@ logger = logging.getLogger(__name__)
 # Google Calendar API constants
 GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_CALENDAR_API_URL = "https://www.googleapis.com/calendar/v3"
-GOOGLE_CALENDAR_SCOPES = "https://www.googleapis.com/auth/calendar.readonly"
+# Requires calendar.events (write) scope — re-run OAuth consent if token was issued
+# with calendar.readonly only. See .env.template for setup instructions.
+GOOGLE_CALENDAR_SCOPES = "https://www.googleapis.com/auth/calendar.events"
 
 # Rate limiting constants
 MAX_RETRIES = 3
@@ -398,6 +400,115 @@ class GoogleCalendarAdapter(CalendarAdapter):
         except Exception as e:
             logger.warning(f"Error parsing Google event: {e}")
             return None
+
+    async def _post_api_call(
+        self,
+        url: str,
+        headers: dict[str, str],
+        json_body: dict,
+    ) -> tuple[dict | None, bool, int]:
+        """POST JSON to a Google API endpoint with retry on 429/401.
+
+        Returns:
+            (response_data, success, latency_ms)
+        """
+        backoff = INITIAL_BACKOFF_SECONDS
+        for attempt in range(MAX_RETRIES):
+            try:
+                client = await self._get_http_client()
+                start_time = time.time()
+                response = await client.post(url, headers=headers, json=json_body)
+                latency_ms = int((time.time() - start_time) * 1000)
+
+                if response.status_code == 200:
+                    return response.json(), True, latency_ms
+                elif response.status_code == RATE_LIMIT_THRESHOLD:
+                    if attempt < MAX_RETRIES - 1:
+                        await asyncio.sleep(backoff)
+                        backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
+                        continue
+                    return None, False, latency_ms
+                elif response.status_code == 401:
+                    if attempt < MAX_RETRIES - 1:
+                        refreshed = await self._refresh_access_token()
+                        if refreshed:
+                            headers["Authorization"] = f"Bearer {self.access_token}"
+                            continue
+                    return None, False, latency_ms
+                else:
+                    return None, False, latency_ms
+
+            except Exception:
+                if attempt < MAX_RETRIES - 1:
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
+                    continue
+                return None, False, 0
+
+        return None, False, 0
+
+    async def create_event(self, user_id: str, event: CalendarEvent) -> CalendarEvent | None:
+        """Create a new event in Google Calendar.
+
+        Uses POST /calendars/primary/events. Sets event.external_id on success.
+        """
+        await self.debug_logger.log_event(
+            agent_name="GoogleCalendarAdapter",
+            event_type="create_event_started",
+            message=f"Creating Google Calendar event: {event.title}",
+            input_payload={"user_id": user_id, "title": event.title,
+                           "start_time": event.start_time.isoformat()},
+        )
+
+        if not await self._ensure_valid_token():
+            await self.debug_logger.log_event(
+                agent_name="GoogleCalendarAdapter",
+                event_type="create_event_failed",
+                level="error",
+                message="Cannot create event: no valid access token",
+            )
+            return None
+
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+        body: dict = {
+            "summary": event.title,
+            "start": {"dateTime": event.start_time.isoformat()},
+            "end": {"dateTime": event.end_time.isoformat()},
+        }
+        if event.location:
+            body["location"] = event.location
+        if event.description:
+            body["description"] = event.description
+        if event.attendees:
+            body["attendees"] = [{"email": addr} for addr in event.attendees]
+
+        url = f"{GOOGLE_CALENDAR_API_URL}/calendars/primary/events"
+        data, success, latency_ms = await self._post_api_call(url, headers, body)
+
+        if success and data:
+            event.external_id = data.get("id")
+            await self.debug_logger.log_event(
+                agent_name="GoogleCalendarAdapter",
+                event_type="create_event_success",
+                message=f"Created Google Calendar event: {event.title} (id={event.external_id})",
+                output_payload={"event_id": event.external_id, "title": event.title},
+                latency_ms=latency_ms,
+            )
+            return event
+
+        await self.debug_logger.log_event(
+            agent_name="GoogleCalendarAdapter",
+            event_type="create_event_failed",
+            level="error",
+            message=f"Failed to create Google Calendar event: {event.title}",
+            latency_ms=latency_ms,
+        )
+        return None
 
     async def is_configured(self, user_id: str) -> bool:
         """Check if Google Calendar is configured with valid credentials.

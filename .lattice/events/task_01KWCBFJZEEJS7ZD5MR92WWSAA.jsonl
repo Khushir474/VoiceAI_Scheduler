@@ -1,0 +1,1 @@
+{"event_id":"ev_01KWCBFS5WXKJCFXTME2HP35XA","task_id":"task_01KWCBFJZEEJS7ZD5MR92WWSAA","event_type":"created","actor":"human:khushi","timestamp":"2026-06-30T14:20:00Z","data":{"short_id":"DOPS-25","title":"Cache and reuse daily plan — skip re-fetch if plan already generated today","status":"backlog","priority":"high"}}

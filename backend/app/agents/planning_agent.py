@@ -20,6 +20,7 @@ from app.services.logger import DebugLogger
 from app.services.calendar_merge import CalendarMerger
 from app.services.langfuse_tracer import LangfuseTracer, observe, propagate_attributes
 from app.services.daily_context import DailyContextService
+from app.services.location import LocationService
 
 
 class PlanningAgent:
@@ -33,6 +34,7 @@ class PlanningAgent:
         maps_adapter: MapsAdapter | None = None,
         langfuse_tracer: LangfuseTracer | None = None,
         daily_context_service: DailyContextService | None = None,
+        location_service: LocationService | None = None,
     ):
         self.debug_logger = debug_logger
         self.calendar_adapters = calendar_adapters
@@ -41,6 +43,7 @@ class PlanningAgent:
         self.langfuse_tracer = langfuse_tracer
         self.calendar_merger = CalendarMerger(debug_logger)
         self.daily_context_service = daily_context_service
+        self.location_service = location_service or LocationService(debug_logger)
 
     @observe(name="fetch-calendar-events", capture_input=False)
     async def _fetch_calendar_events(self, user_id: str, target_date: date) -> list[CalendarEvent]:
@@ -77,8 +80,8 @@ class PlanningAgent:
         return deduplicated_events
 
     @observe(name="fetch-weather", capture_input=False)
-    async def _fetch_weather(self, latitude: float = 40.7128, longitude: float = -74.0060) -> WeatherData | None:
-        """Fetch weather via cloud API (default: NYC coordinates)."""
+    async def _fetch_weather(self, latitude: float, longitude: float) -> WeatherData | None:
+        """Fetch weather via cloud API for the detected user coordinates."""
         if not self.weather_adapter:
             return None
 
@@ -113,23 +116,27 @@ class PlanningAgent:
 
     async def _run_inner(self, state: AgentState) -> AgentState:
         try:
+            # Detect location first — lat/lng feed weather; timezone feeds the LLM prompt
+            location = await self.location_service.detect_with_fallback()
             target_date = date.today()
 
-            # Fetch calendar events
-            events = await self._fetch_calendar_events(state.user_id, target_date)
-
-            # Fetch weather
-            weather = await self._fetch_weather()
-
-            # Fetch commute (TODO: load from user preferences)
-            commute = await self._fetch_commute("123 Main St, New York, NY", "456 Work Ave, New York, NY")
+            # Fetch data concurrently once we have coordinates
+            import asyncio
+            events, weather, commute = await asyncio.gather(
+                self._fetch_calendar_events(state.user_id, target_date),
+                self._fetch_weather(location.lat, location.lng),
+                self._fetch_commute(
+                    from_addr=f"{location.city}, {location.region}",
+                    to_addr=f"{location.city}, {location.region}",
+                ),
+            )
 
             # Generate summaries
             calendar_summary = self._generate_calendar_summary(events)
             weather_summary = f"{weather.condition} and {weather.temperature_high}°F" if weather else "Unable to fetch weather"
             commute_summary = f"{commute.estimated_duration_minutes} minute commute" if commute else "No commute data"
 
-            # Build plan
+            # Build plan — location context stored here, not in settings
             plan = DailyPlanData(
                 calendar_events=events,
                 calendar_summary=calendar_summary,
@@ -141,6 +148,10 @@ class PlanningAgent:
                     duration_minutes=30,
                     recommended_time="morning",
                 ),
+                user_timezone=location.timezone,
+                user_city=location.display_name,
+                user_lat=location.lat,
+                user_lng=location.lng,
             )
 
             state.plan = plan

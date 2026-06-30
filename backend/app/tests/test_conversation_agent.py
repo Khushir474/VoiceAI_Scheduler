@@ -758,3 +758,319 @@ class TestLLMCallWithRetry:
 
         with pytest.raises(Exception, match="timeout after"):
             await conversation_agent._call_claude("system", "user", max_retries=1)
+
+
+# ─── DOPS-22: generate_post_call_summary ─────────────────────────────────────
+
+class TestGeneratePostCallSummary:
+    """Tests for ConversationAgent.generate_post_call_summary (DOPS-22)."""
+
+    @pytest.fixture
+    def state_with_transcript(self, sample_agent_state):
+        sample_agent_state.transcript = [
+            {"role": "assistant", "content": "Good morning! Here is your plan."},
+            {"role": "user", "content": "I also have a dentist appointment at 3pm."},
+            {"role": "assistant", "content": "Got it, noted."},
+            {"role": "user", "content": "And actually my standup moved to 9:30."},
+        ]
+        return sample_agent_state
+
+    @pytest.mark.asyncio
+    async def test_returns_summary_string(self, conversation_agent, state_with_transcript):
+        """generate_post_call_summary returns a non-empty string."""
+        conversation_agent._call_llm = AsyncMock(
+            return_value=("Good morning! Here's your DailyOps summary: ...", 120)
+        )
+        result = await conversation_agent.generate_post_call_summary(state_with_transcript)
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    @pytest.mark.asyncio
+    async def test_sets_state_post_call_summary(self, conversation_agent, state_with_transcript):
+        """generate_post_call_summary writes into state.post_call_summary."""
+        expected = "Good morning! Here's your DailyOps summary: team standup at 9:30am..."
+        conversation_agent._call_llm = AsyncMock(return_value=(expected, 100))
+        await conversation_agent.generate_post_call_summary(state_with_transcript)
+        assert state_with_transcript.post_call_summary == expected
+
+    @pytest.mark.asyncio
+    async def test_overwrites_plan_final_summary(self, conversation_agent, state_with_transcript):
+        """generate_post_call_summary updates plan.final_summary so send_summary picks it up."""
+        expected = "Full context summary text"
+        conversation_agent._call_llm = AsyncMock(return_value=(expected, 90))
+        await conversation_agent.generate_post_call_summary(state_with_transcript)
+        assert state_with_transcript.plan.final_summary == expected
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_pre_call_summary_on_llm_error(
+        self, conversation_agent, state_with_transcript
+    ):
+        """On LLM failure, falls back to plan.final_summary instead of raising."""
+        state_with_transcript.plan.final_summary = "Pre-call fallback summary"
+        conversation_agent._call_llm = AsyncMock(side_effect=Exception("LLM unavailable"))
+        result = await conversation_agent.generate_post_call_summary(state_with_transcript)
+        assert result == "Pre-call fallback summary"
+
+    @pytest.mark.asyncio
+    async def test_fallback_when_no_plan_and_llm_error(self, conversation_agent, sample_agent_state):
+        """On LLM failure with no plan, returns a safe default string."""
+        sample_agent_state.plan = None
+        sample_agent_state.transcript = []
+        conversation_agent._call_llm = AsyncMock(side_effect=Exception("LLM down"))
+        result = await conversation_agent.generate_post_call_summary(sample_agent_state)
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    @pytest.mark.asyncio
+    async def test_logs_success_event(self, conversation_agent, state_with_transcript, debug_logger):
+        """generate_post_call_summary logs a post_call_summary_generated event."""
+        conversation_agent._call_llm = AsyncMock(return_value=("Summary", 80))
+        await conversation_agent.generate_post_call_summary(state_with_transcript)
+        logged_types = [
+            call.kwargs.get("event_type") or call.args[1]
+            for call in debug_logger.log_event.call_args_list
+            if debug_logger.log_event.called
+        ]
+        # Check that the event was logged (kwarg form)
+        assert any(
+            "post_call_summary_generated" in str(c) for c in debug_logger.log_event.call_args_list
+        )
+
+    @pytest.mark.asyncio
+    async def test_prompt_includes_transcript_turns(self, conversation_agent, state_with_transcript, mocker):
+        """The LLM is called with a prompt that contains transcript content."""
+        conversation_agent._call_llm = AsyncMock(return_value=("summary", 100))
+        await conversation_agent.generate_post_call_summary(state_with_transcript)
+        call_args = conversation_agent._call_llm.call_args
+        user_prompt = call_args[0][1] if call_args[0] else call_args[1].get("user_prompt", "")
+        assert "dentist" in user_prompt or "standup" in user_prompt or "3pm" in user_prompt
+
+    @pytest.mark.asyncio
+    async def test_prompt_includes_calendar_events(self, conversation_agent, state_with_transcript):
+        """The prompt includes the original calendar events from the plan."""
+        conversation_agent._call_llm = AsyncMock(return_value=("summary", 100))
+        await conversation_agent.generate_post_call_summary(state_with_transcript)
+        user_prompt = conversation_agent._call_llm.call_args[0][1]
+        assert "Team Standup" in user_prompt or "Client Call" in user_prompt
+
+
+# ─── DOPS-8: calendar event creation from state ───────────────────────────────
+
+class TestCreateCalendarEventsFromState:
+    """Tests for ConversationAgent.create_calendar_events_from_state (DOPS-8)."""
+
+    @pytest.fixture
+    def state_with_ad_hoc(self, sample_agent_state):
+        now = datetime.now(timezone.utc)
+        sample_agent_state.ad_hoc_events = [
+            {
+                "title": "Dentist",
+                "start_time": now.replace(hour=15, minute=0, second=0, microsecond=0).isoformat(),
+                "end_time": now.replace(hour=16, minute=0, second=0, microsecond=0).isoformat(),
+                "location": "123 Main St",
+            }
+        ]
+        return sample_agent_state
+
+    @pytest.mark.asyncio
+    async def test_calls_create_event_on_configured_adapter(
+        self, conversation_agent, state_with_ad_hoc, mocker
+    ):
+        """create_calendar_events_from_state calls adapter.create_event for each ad-hoc event."""
+        from app.adapters.calendar.base import CalendarAdapter
+        from app.agents.state import CalendarEvent
+
+        mock_adapter = mocker.AsyncMock(spec=CalendarAdapter)
+        mock_adapter.is_configured = mocker.AsyncMock(return_value=True)
+        created_event = CalendarEvent(
+            source="google_calendar",
+            external_id="new_id_123",
+            title="Dentist",
+            start_time=state_with_ad_hoc.ad_hoc_events[0]["start_time"],
+            end_time=state_with_ad_hoc.ad_hoc_events[0]["end_time"],
+        )
+        mock_adapter.create_event = mocker.AsyncMock(return_value=created_event)
+
+        result = await conversation_agent.create_calendar_events_from_state(
+            state_with_ad_hoc, [mock_adapter]
+        )
+
+        mock_adapter.create_event.assert_called_once()
+        assert len(result) == 1
+        assert result[0].title == "Dentist"
+
+    @pytest.mark.asyncio
+    async def test_appends_created_events_to_plan(
+        self, conversation_agent, state_with_ad_hoc, mocker
+    ):
+        """Successfully created events are appended to state.plan.calendar_events."""
+        from app.adapters.calendar.base import CalendarAdapter
+        from app.agents.state import CalendarEvent
+
+        mock_adapter = mocker.AsyncMock(spec=CalendarAdapter)
+        mock_adapter.is_configured = mocker.AsyncMock(return_value=True)
+
+        dt = datetime.fromisoformat(state_with_ad_hoc.ad_hoc_events[0]["start_time"])
+        created = CalendarEvent(
+            source="google_calendar",
+            title="Dentist",
+            start_time=dt,
+            end_time=dt,
+        )
+        mock_adapter.create_event = mocker.AsyncMock(return_value=created)
+
+        initial_count = len(state_with_ad_hoc.plan.calendar_events)
+        await conversation_agent.create_calendar_events_from_state(
+            state_with_ad_hoc, [mock_adapter]
+        )
+
+        assert len(state_with_ad_hoc.plan.calendar_events) == initial_count + 1
+
+    @pytest.mark.asyncio
+    async def test_skips_unconfigured_adapters(
+        self, conversation_agent, state_with_ad_hoc, mocker
+    ):
+        """Adapters that report is_configured=False are skipped."""
+        from app.adapters.calendar.base import CalendarAdapter
+
+        mock_adapter = mocker.AsyncMock(spec=CalendarAdapter)
+        mock_adapter.is_configured = mocker.AsyncMock(return_value=False)
+        mock_adapter.create_event = mocker.AsyncMock()
+
+        result = await conversation_agent.create_calendar_events_from_state(
+            state_with_ad_hoc, [mock_adapter]
+        )
+
+        mock_adapter.create_event.assert_not_called()
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_skips_event_without_title(self, conversation_agent, sample_agent_state, mocker):
+        """Ad-hoc event dicts with no title are silently skipped."""
+        from app.adapters.calendar.base import CalendarAdapter
+
+        sample_agent_state.ad_hoc_events = [{"title": "", "start_time": None}]
+        mock_adapter = mocker.AsyncMock(spec=CalendarAdapter)
+        mock_adapter.is_configured = mocker.AsyncMock(return_value=True)
+        mock_adapter.create_event = mocker.AsyncMock()
+
+        result = await conversation_agent.create_calendar_events_from_state(
+            sample_agent_state, [mock_adapter]
+        )
+        mock_adapter.create_event.assert_not_called()
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_skips_event_without_parseable_start_time(
+        self, conversation_agent, sample_agent_state, mocker
+    ):
+        """Ad-hoc events with no parseable start_time are skipped."""
+        from app.adapters.calendar.base import CalendarAdapter
+
+        sample_agent_state.ad_hoc_events = [{"title": "Mystery Event", "start_time": "not-a-date"}]
+        mock_adapter = mocker.AsyncMock(spec=CalendarAdapter)
+        mock_adapter.is_configured = mocker.AsyncMock(return_value=True)
+        mock_adapter.create_event = mocker.AsyncMock()
+
+        result = await conversation_agent.create_calendar_events_from_state(
+            sample_agent_state, [mock_adapter]
+        )
+        mock_adapter.create_event.assert_not_called()
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_defaults_end_time_to_one_hour_after_start(
+        self, conversation_agent, sample_agent_state, mocker
+    ):
+        """When end_time is missing, event.end_time defaults to start + 1 hour."""
+        from app.adapters.calendar.base import CalendarAdapter
+        from app.agents.state import CalendarEvent
+
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        sample_agent_state.ad_hoc_events = [
+            {"title": "Quick meeting", "start_time": now.isoformat()}
+        ]
+
+        captured = {}
+
+        mock_adapter = mocker.AsyncMock(spec=CalendarAdapter)
+        mock_adapter.is_configured = mocker.AsyncMock(return_value=True)
+
+        async def capture_create(user_id, event):
+            captured["event"] = event
+            return event
+
+        mock_adapter.create_event = capture_create
+
+        await conversation_agent.create_calendar_events_from_state(
+            sample_agent_state, [mock_adapter]
+        )
+
+        assert "event" in captured
+        from datetime import timedelta
+        assert captured["event"].end_time == captured["event"].start_time + timedelta(hours=1)
+
+
+class TestProcessUserInputAdHocEvents:
+    """DOPS-8: process_user_input populates state.ad_hoc_events on add_event action."""
+
+    @pytest.mark.asyncio
+    async def test_add_event_action_populates_ad_hoc_events(
+        self, conversation_agent, sample_agent_state
+    ):
+        """When LLM returns add_event, the new_event dict is appended to state.ad_hoc_events."""
+        from datetime import timezone
+        now = datetime.now(timezone.utc)
+        sample_agent_state.user_input = "I also have a dentist at 3pm"
+
+        llm_response = json.dumps({
+            "action": "add_event",
+            "new_event": {
+                "title": "Dentist",
+                "start_time": now.replace(hour=15).isoformat(),
+                "end_time": now.replace(hour=16).isoformat(),
+                "location": None,
+            },
+            "response": "Got it, I'll add that.",
+        })
+        conversation_agent._call_llm = AsyncMock(return_value=(llm_response, 100))
+
+        await conversation_agent.process_user_input(sample_agent_state)
+
+        assert len(sample_agent_state.ad_hoc_events) == 1
+        assert sample_agent_state.ad_hoc_events[0]["title"] == "Dentist"
+
+    @pytest.mark.asyncio
+    async def test_confirm_action_does_not_populate_ad_hoc_events(
+        self, conversation_agent, sample_agent_state
+    ):
+        """Non-add_event actions don't add to state.ad_hoc_events."""
+        sample_agent_state.user_input = "Sounds good"
+
+        llm_response = json.dumps({
+            "action": "confirm",
+            "new_event": None,
+            "response": "Great, all set!",
+        })
+        conversation_agent._call_llm = AsyncMock(return_value=(llm_response, 80))
+
+        await conversation_agent.process_user_input(sample_agent_state)
+
+        assert sample_agent_state.ad_hoc_events == []
+
+    @pytest.mark.asyncio
+    async def test_add_event_without_title_not_stored(
+        self, conversation_agent, sample_agent_state
+    ):
+        """add_event with an empty/null title is not stored in ad_hoc_events."""
+        sample_agent_state.user_input = "something vague"
+
+        llm_response = json.dumps({
+            "action": "add_event",
+            "new_event": {"title": "", "start_time": None},
+            "response": "Noted.",
+        })
+        conversation_agent._call_llm = AsyncMock(return_value=(llm_response, 90))
+
+        await conversation_agent.process_user_input(sample_agent_state)
+        assert sample_agent_state.ad_hoc_events == []

@@ -10,14 +10,14 @@
   "done_at": null,
   "evidence_refs": [],
   "id": "task_01KWABZAW92ZXN9S0HP5G75ASA",
-  "last_event_id": "ev_01KWACB0YZAG0QEXQYNWYQED43",
-  "last_status_changed_at": "2026-06-29T18:58:53Z",
+  "last_event_id": "ev_01KWAF6DRV0XN1QA2Z9Y1ME518",
+  "last_status_changed_at": "2026-06-29T19:55:11Z",
   "priority": "critical",
   "relationships_out": [],
   "reopened_count": 0,
   "schema_version": 1,
   "short_id": "DOPS-13",
-  "status": "backlog",
+  "status": "in_planning",
   "tags": [
     "persona",
     "prompts",
@@ -26,6 +26,6 @@
   ],
   "title": "Max persona warmth \u2014 update prompts and Vapi assistant config",
   "type": "task",
-  "updated_at": "2026-06-29T19:05:16Z",
+  "updated_at": "2026-06-29T19:55:11Z",
   "urgency": null
 }

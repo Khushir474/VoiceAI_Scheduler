@@ -1,13 +1,14 @@
 """Apple Calendar adapter via .ics file parsing and CalDAV (cloud-based)."""
 
 import logging
+import uuid as _uuid
 import httpx
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from xml.etree import ElementTree as ET
 from typing import Optional
 
-from icalendar import Calendar as ICalCalendar
+from icalendar import Calendar as ICalCalendar, Event as ICalEvent
 from icalendar.prop import vDDDTypes
 
 from app.agents.state import CalendarEvent
@@ -316,6 +317,278 @@ class AppleICalAdapter(CalendarAdapter):
         has_ics_file = self.ics_file_path and Path(self.ics_file_path).exists()
         has_caldav = bool(self.username and self.password)
         return has_ics_file or has_caldav
+
+    async def create_event(self, user_id: str, event: CalendarEvent) -> CalendarEvent | None:
+        """Create a new calendar event.
+
+        Tries CalDAV PUT first (if credentials configured), then falls back to
+        appending a VEVENT to the local .ics file. Returns None if neither is
+        available or the write fails.
+        """
+        event_uid = event.external_id or str(_uuid.uuid4())
+        event.external_id = event_uid
+
+        await self.debug_logger.log_event(
+            agent_name="AppleICalAdapter",
+            event_type="create_event_started",
+            message=f"Creating Apple iCal event: {event.title}",
+            input_payload={"user_id": user_id, "title": event.title,
+                           "start_time": event.start_time.isoformat(), "uid": event_uid},
+        )
+
+        # Path A: CalDAV PUT
+        if self.username and self.password:
+            result = await self._caldav_put_event(event, event_uid)
+            if result:
+                await self.debug_logger.log_event(
+                    agent_name="AppleICalAdapter",
+                    event_type="create_event_success",
+                    message=f"Created Apple iCal event via CalDAV: {event.title}",
+                    output_payload={"uid": event_uid, "method": "caldav"},
+                )
+                return event
+            await self.debug_logger.log_event(
+                agent_name="AppleICalAdapter",
+                event_type="create_event_failed",
+                level="error",
+                message=f"CalDAV PUT failed for event: {event.title}",
+            )
+            return None
+
+        # Path B: append to .ics file
+        if self.ics_file_path:
+            result = await self._append_to_ics_file(event, event_uid)
+            if result:
+                await self.debug_logger.log_event(
+                    agent_name="AppleICalAdapter",
+                    event_type="create_event_success",
+                    message=f"Created Apple iCal event via .ics file: {event.title}",
+                    output_payload={"uid": event_uid, "method": "ics_file"},
+                )
+                return event
+            await self.debug_logger.log_event(
+                agent_name="AppleICalAdapter",
+                event_type="create_event_failed",
+                level="error",
+                message=f".ics file append failed for event: {event.title}",
+            )
+            return None
+
+        # Path C: not configured
+        await self.debug_logger.log_event(
+            agent_name="AppleICalAdapter",
+            event_type="create_event_skipped",
+            level="warning",
+            message="Cannot create event: no CalDAV credentials or .ics file configured",
+        )
+        return None
+
+    def _build_vcalendar(self, event: CalendarEvent, uid: str) -> bytes:
+        """Build a minimal iCalendar document containing one VEVENT."""
+        cal = ICalCalendar()
+        cal.add("prodid", "-//DailyOps AI//EN")
+        cal.add("version", "2.0")
+
+        vevent = ICalEvent()
+        vevent.add("uid", uid)
+        vevent.add("summary", event.title)
+        vevent.add("dtstart", event.start_time)
+        vevent.add("dtend", event.end_time)
+        if event.location:
+            vevent.add("location", event.location)
+        if event.description:
+            vevent.add("description", event.description)
+        cal.add_component(vevent)
+        return cal.to_ical()
+
+    async def _discover_calendar_url(self) -> str | None:
+        """Discover a writable calendar collection URL via CalDAV PROPFIND.
+
+        iCloud uses a numeric DSID in the URL, not the username. Walk:
+          1. PROPFIND / → current-user-principal href
+          2. PROPFIND principal → calendar-home-set href
+          3. PROPFIND calendar home (Depth:1) → pick first writable calendar
+        """
+        NS = {
+            "D": "DAV:",
+            "C": "urn:ietf:params:xml:ns:caldav",
+            "CS": "http://calendarserver.org/ns/",
+        }
+        # Types that are NOT writable event stores
+        SKIP_TYPES = {
+            "{urn:ietf:params:xml:ns:caldav}schedule-inbox",
+            "{urn:ietf:params:xml:ns:caldav}schedule-outbox",
+            "{http://calendarserver.org/ns/}notification",
+            "{http://calendarserver.org/ns/}subscribed",
+        }
+        auth = (self.username, self.password)
+        h0 = {"Content-Type": "application/xml; charset=utf-8", "Depth": "0"}
+
+        def _abs(href: str) -> str:
+            return (self.caldav_url + href) if href.startswith("/") else href
+
+        def _find_text(xml_str: str, *path: str) -> str | None:
+            """Parse xml_str with ET and return text at the namespace-qualified path."""
+            try:
+                root = ET.fromstring(xml_str)
+                node = root
+                for tag in path:
+                    # Try with each known namespace
+                    found = None
+                    for ns_uri in list(NS.values()) + [""]:
+                        key = f"{{{ns_uri}}}{tag}" if ns_uri else tag
+                        found = node.find(f".//{key}")
+                        if found is not None:
+                            break
+                    if found is None:
+                        return None
+                    node = found
+                return (node.text or "").strip() or None
+            except ET.ParseError:
+                return None
+
+        try:
+            # Step 1: principal URL
+            r1 = await self.http_client.request(
+                "PROPFIND", self.caldav_url + "/", auth=auth, headers=h0,
+                content=(
+                    '<?xml version="1.0" encoding="utf-8"?>'
+                    '<D:propfind xmlns:D="DAV:"><D:prop>'
+                    '<D:current-user-principal/>'
+                    '</D:prop></D:propfind>'
+                ),
+            )
+            principal_href = _find_text(r1.text, "current-user-principal", "href")
+            if not principal_href:
+                logger.warning(f"CalDAV step1: no current-user-principal ({r1.status_code})")
+                return None
+
+            # Step 2: calendar-home-set
+            r2 = await self.http_client.request(
+                "PROPFIND", _abs(principal_href), auth=auth, headers=h0,
+                content=(
+                    '<?xml version="1.0" encoding="utf-8"?>'
+                    '<D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">'
+                    '<D:prop><C:calendar-home-set/></D:prop></D:propfind>'
+                ),
+            )
+            home_href = _find_text(r2.text, "calendar-home-set", "href")
+            if not home_href:
+                logger.warning("CalDAV step2: no calendar-home-set")
+                return None
+            home_url = _abs(home_href)
+
+            # Step 3: list calendars
+            r3 = await self.http_client.request(
+                "PROPFIND", home_url, auth=auth,
+                headers={**h0, "Depth": "1"},
+                content=(
+                    '<?xml version="1.0" encoding="utf-8"?>'
+                    '<D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">'
+                    '<D:prop><D:resourcetype/><D:displayname/></D:prop></D:propfind>'
+                ),
+            )
+            root = ET.fromstring(r3.text)
+            CALDAV_CAL = "{urn:ietf:params:xml:ns:caldav}calendar"
+            DAV_NS = "DAV:"
+
+            candidates: list[tuple[str, str]] = []  # (href, displayname)
+            for response_el in root.iter(f"{{{DAV_NS}}}response"):
+                href_el = response_el.find(f"{{{DAV_NS}}}href")
+                if href_el is None:
+                    continue
+                href = (href_el.text or "").strip()
+                if href.rstrip("/") == home_href.rstrip("/"):
+                    continue  # skip home itself
+
+                # Check resourcetype
+                rt = response_el.find(f".//{{{DAV_NS}}}resourcetype")
+                if rt is None:
+                    continue
+                child_tags = {child.tag for child in rt}
+                if CALDAV_CAL not in child_tags:
+                    continue  # not a calendar
+                if child_tags & SKIP_TYPES:
+                    continue  # inbox/outbox/notification/subscribed
+
+                name_el = response_el.find(f".//{{{DAV_NS}}}displayname")
+                name = (name_el.text or "").strip() if name_el is not None else ""
+                candidates.append((href, name))
+
+            if not candidates:
+                logger.warning("CalDAV step3: no writable calendar collections found")
+                return None
+
+            # Prefer "Home" calendar; fall back to first found
+            preferred = next(
+                (href for href, name in candidates if name.lower() == "home"),
+                candidates[0][0],
+            )
+            cal_url = _abs(preferred)
+            logger.debug(f"CalDAV discovered calendar: {cal_url}")
+            return cal_url
+
+        except Exception as e:
+            logger.error(f"CalDAV URL discovery failed: {e}")
+            return None
+
+    async def _caldav_put_event(self, event: CalendarEvent, uid: str) -> bool:
+        """PUT a single VEVENT to the CalDAV server. Returns True on success."""
+        ical_bytes = self._build_vcalendar(event, uid)
+
+        # Discover real calendar URL (iCloud uses a numeric DSID, not the username)
+        if not hasattr(self, "_calendar_url"):
+            self._calendar_url = await self._discover_calendar_url()
+
+        if self._calendar_url:
+            url = self._calendar_url.rstrip("/") + f"/{uid}.ics"
+        else:
+            # Hard fallback to old pattern
+            url = f"{self.caldav_url}/principals/__uuids__/{self.username}/calendar.ics/{uid}.ics"
+
+        try:
+            response = await self.http_client.put(
+                url,
+                content=ical_bytes,
+                auth=(self.username, self.password),
+                headers={"Content-Type": "text/calendar; charset=utf-8"},
+            )
+            if response.status_code not in (201, 204):
+                logger.error(f"CalDAV PUT returned {response.status_code}: {response.text[:200]}")
+            return response.status_code in (201, 204)
+        except Exception as e:
+            logger.error(f"CalDAV PUT failed: {e}")
+            return False
+
+    async def _append_to_ics_file(self, event: CalendarEvent, uid: str) -> bool:
+        """Append a VEVENT to the local .ics file. Returns True on success."""
+        file_path = Path(self.ics_file_path)
+        try:
+            if file_path.exists():
+                with open(file_path, "rb") as f:
+                    existing_cal = ICalCalendar.from_ical(f.read())
+            else:
+                existing_cal = ICalCalendar()
+                existing_cal.add("prodid", "-//DailyOps AI//EN")
+                existing_cal.add("version", "2.0")
+
+            vevent = ICalEvent()
+            vevent.add("uid", uid)
+            vevent.add("summary", event.title)
+            vevent.add("dtstart", event.start_time)
+            vevent.add("dtend", event.end_time)
+            if event.location:
+                vevent.add("location", event.location)
+            if event.description:
+                vevent.add("description", event.description)
+            existing_cal.add_component(vevent)
+
+            with open(file_path, "wb") as f:
+                f.write(existing_cal.to_ical())
+            return True
+        except Exception as e:
+            logger.error(f".ics file append failed: {e}")
+            return False
 
     async def parse_ics_file(self, file_path: str) -> list[CalendarEvent]:
         """Public method to parse an .ics file and return all events.

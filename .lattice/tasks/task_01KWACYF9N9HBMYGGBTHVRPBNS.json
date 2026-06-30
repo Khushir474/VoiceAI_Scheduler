@@ -10,14 +10,14 @@
   "done_at": null,
   "evidence_refs": [],
   "id": "task_01KWACYF9N9HBMYGGBTHVRPBNS",
-  "last_event_id": "ev_01KWACYF9P8S5NS8Z8MTMKGQ4F",
-  "last_status_changed_at": "2026-06-29T19:15:53Z",
+  "last_event_id": "ev_01KWAF897Y2SB30765T1D1CE7W",
+  "last_status_changed_at": "2026-06-29T19:56:12Z",
   "priority": "high",
   "relationships_out": [],
   "reopened_count": 0,
   "schema_version": 1,
   "short_id": "DOPS-17",
-  "status": "backlog",
+  "status": "in_planning",
   "tags": [
     "conversation",
     "vapi",
@@ -27,6 +27,6 @@
   ],
   "title": "Bidirectional conversation \u2014 user can respond to Max and Max replies in context",
   "type": "task",
-  "updated_at": "2026-06-29T19:15:53Z",
+  "updated_at": "2026-06-29T19:56:12Z",
   "urgency": null
 }

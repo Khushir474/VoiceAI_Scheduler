@@ -634,3 +634,140 @@ class TestGoogleCalendarAdapterEdgeCases:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ─── DOPS-8: create_event ────────────────────────────────────────────────────
+
+class TestGoogleCalendarCreateEvent:
+    """Tests for GoogleCalendarAdapter.create_event (DOPS-8)."""
+
+    @pytest.fixture
+    def now(self):
+        return datetime.now(timezone.utc).replace(microsecond=0)
+
+    @pytest.fixture
+    def sample_event(self, now):
+        return CalendarEvent(
+            source="google_calendar",
+            title="Dentist Appointment",
+            start_time=now.replace(hour=15, minute=0),
+            end_time=now.replace(hour=16, minute=0),
+            location="123 Main St",
+        )
+
+    @pytest.mark.asyncio
+    async def test_create_event_success_returns_event_with_external_id(
+        self, adapter, mock_debug_logger, sample_event
+    ):
+        """create_event returns the event with external_id set on HTTP 200."""
+        adapter.access_token = "valid-token"
+        adapter.token_expiry = (
+            datetime.now(timezone.utc) + timedelta(hours=1)
+        ).isoformat()
+
+        api_response = {
+            "id": "created_event_abc123",
+            "summary": "Dentist Appointment",
+        }
+        mock_http = MagicMock()
+        mock_http.status_code = 200
+        mock_http.json.return_value = api_response
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_http)
+        adapter.http_client = mock_client
+
+        result = await adapter.create_event("user1", sample_event)
+
+        assert result is not None
+        assert result.external_id == "created_event_abc123"
+        assert result.title == "Dentist Appointment"
+
+    @pytest.mark.asyncio
+    async def test_create_event_returns_none_on_403(
+        self, adapter, mock_debug_logger, sample_event
+    ):
+        """create_event returns None when the API returns 403 Forbidden."""
+        adapter.access_token = "valid-token"
+        adapter.token_expiry = (
+            datetime.now(timezone.utc) + timedelta(hours=1)
+        ).isoformat()
+
+        mock_http = MagicMock()
+        mock_http.status_code = 403
+        mock_http.json.return_value = {}
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_http)
+        adapter.http_client = mock_client
+
+        result = await adapter.create_event("user1", sample_event)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_create_event_refreshes_token_on_401(
+        self, adapter, mock_debug_logger, sample_event
+    ):
+        """create_event refreshes the token when the first POST returns 401."""
+        adapter.access_token = "stale-token"
+        adapter.token_expiry = (
+            datetime.now(timezone.utc) + timedelta(hours=1)
+        ).isoformat()
+
+        resp_401 = MagicMock()
+        resp_401.status_code = 401
+        resp_200 = MagicMock()
+        resp_200.status_code = 200
+        resp_200.json.return_value = {"id": "new_event_id"}
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(side_effect=[resp_401, resp_200])
+        adapter.http_client = mock_client
+
+        # Patch token refresh to succeed and update token
+        async def fake_refresh():
+            adapter.access_token = "fresh-token"
+            return True
+
+        adapter._refresh_access_token = fake_refresh
+
+        result = await adapter.create_event("user1", sample_event)
+        assert result is not None
+        assert result.external_id == "new_event_id"
+
+    @pytest.mark.asyncio
+    async def test_create_event_logs_success(
+        self, adapter, mock_debug_logger, sample_event
+    ):
+        """create_event logs create_event_success to debug_logger."""
+        adapter.access_token = "valid-token"
+        adapter.token_expiry = (
+            datetime.now(timezone.utc) + timedelta(hours=1)
+        ).isoformat()
+
+        mock_http = MagicMock()
+        mock_http.status_code = 200
+        mock_http.json.return_value = {"id": "evt_xyz"}
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_http)
+        adapter.http_client = mock_client
+
+        await adapter.create_event("user1", sample_event)
+
+        event_types = [
+            call.kwargs.get("event_type") or (call.args[1] if len(call.args) > 1 else "")
+            for call in mock_debug_logger.log_event.call_args_list
+        ]
+        assert any("create_event_success" in str(et) for et in event_types)
+
+    @pytest.mark.asyncio
+    async def test_create_event_no_token_returns_none(
+        self, adapter, mock_debug_logger, sample_event
+    ):
+        """create_event returns None when no valid token can be obtained."""
+        adapter.access_token = None
+        adapter.refresh_token = None  # prevents refresh
+
+        result = await adapter.create_event("user1", sample_event)
+        assert result is None

@@ -24,3 +24,12 @@ class CalendarAdapter(ABC):
     async def is_configured(self, user_id: str) -> bool:
         """Check if the adapter is configured for this user."""
         pass
+
+    @abstractmethod
+    async def create_event(self, user_id: str, event: CalendarEvent) -> CalendarEvent | None:
+        """Create a new calendar event.
+
+        Returns the event with external_id populated on success, None on failure.
+        Implementations must log mutations to debug_logs.
+        """
+        pass

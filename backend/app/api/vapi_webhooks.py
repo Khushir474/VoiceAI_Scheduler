@@ -25,6 +25,15 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+# Vapi ended-reason values that indicate the call never meaningfully completed.
+# We skip post-call summary + messaging for these.
+_FAILED_CALL_REASONS: frozenset[str] = frozenset({
+    "assistant-error",
+    "customer-did-not-answer",
+    "pipeline-error",
+    "phone-call-provider-closed-websocket-unexpectedly",
+})
+
 from fastapi import APIRouter, HTTPException, Request
 
 from app.config import get_settings
@@ -275,14 +284,15 @@ async def _handle_end_of_call_report(message: dict, supabase: Any, settings) -> 
     if duration_seconds:
         state.call_duration_seconds = int(duration_seconds)
 
+    from app.agents.conversation_agent import ConversationAgent
+    conv_agent = ConversationAgent(
+        debug_logger=debug_logger,
+        provider=settings.llm_provider,
+    )
+
     # --- Process user input through ConversationAgent -------------------------
     agent_reply = ""
     if combined_user_input:
-        from app.agents.conversation_agent import ConversationAgent
-        conv_agent = ConversationAgent(
-            debug_logger=debug_logger,
-            provider=settings.llm_provider,
-        )
         try:
             _action, agent_reply = await conv_agent.process_user_input(state)
             await _log(supabase, run_id, call_id, "user_input_processed",
@@ -293,39 +303,83 @@ async def _handle_end_of_call_report(message: dict, supabase: Any, settings) -> 
             await _log(supabase, run_id, call_id, "user_input_error",
                        f"Failed to process user input: {e}", {}, level="error")
 
-    # --- Send SMS summary -----------------------------------------------------
+    # --- Create ad-hoc calendar events (DOPS-8) --------------------------------
+    # Must run BEFORE generate_post_call_summary so newly-created events appear
+    # in state.plan.calendar_events and are reflected in the LLM summary.
+    events_created = 0
+    if state.ad_hoc_events:
+        try:
+            from app.adapters.calendar.google_calendar import GoogleCalendarAdapter
+            from app.adapters.calendar.apple_ical import AppleICalAdapter
+
+            cal_adapters = [
+                GoogleCalendarAdapter(debug_logger, settings),
+                AppleICalAdapter(
+                    debug_logger,
+                    caldav_url=getattr(settings, "apple_ical_caldav_url", None),
+                    username=getattr(settings, "apple_ical_username", None),
+                    password=getattr(settings, "apple_ical_password", None),
+                ),
+            ]
+            created = await conv_agent.create_calendar_events_from_state(state, cal_adapters)
+            events_created = len(created)
+            await _log(supabase, run_id, call_id, "calendar_events_created",
+                       f"Created {events_created} calendar event(s) from call",
+                       {"count": events_created,
+                        "titles": [e.title for e in created]})
+        except Exception as e:
+            logger.error(f"calendar event creation failed: {e}")
+            await _log(supabase, run_id, call_id, "calendar_events_create_error",
+                       f"Failed to create calendar events: {e}", {}, level="error")
+
+    # --- Generate post-call summary (DOPS-22) ---------------------------------
+    # Skip if the call never meaningfully completed (e.g. connection error).
     summary_sent = False
-    if settings.user_phone_number:
-        from app.agents.conversation_agent import ConversationAgent
-        from app.adapters.messaging.imessage_bridge import IMessageBridgeAdapter
-        from app.adapters.messaging.twilio_sms import TwilioSMSAdapter
+    post_call_summary_generated = False
 
-        conv_agent = ConversationAgent(
-            debug_logger=debug_logger,
-            provider=settings.llm_provider,
-        )
+    if ended_reason in _FAILED_CALL_REASONS:
+        await _log(supabase, run_id, call_id, "summary_skipped",
+                   f"Summary skipped: call ended due to '{ended_reason}'",
+                   {"ended_reason": ended_reason})
+    else:
+        try:
+            await conv_agent.generate_post_call_summary(state)
+            post_call_summary_generated = True
+            await _log(supabase, run_id, call_id, "post_call_summary_generated",
+                       "Post-call summary generated from full call context",
+                       {"summary_length": len(state.post_call_summary),
+                        "transcript_turns": len(turns)})
+        except Exception as e:
+            logger.error(f"generate_post_call_summary failed: {e}")
+            await _log(supabase, run_id, call_id, "post_call_summary_error",
+                       f"Summary generation failed: {e}", {}, level="error")
 
-        # Prefer iMessage bridge; fall back to Twilio
-        if settings.imessage_bridge_url:
-            msg_adapter = IMessageBridgeAdapter(debug_logger, settings.imessage_bridge_url)
-            if not await msg_adapter.is_available():
+        # --- Send SMS/iMessage summary ----------------------------------------
+        if settings.user_phone_number:
+            from app.adapters.messaging.imessage_bridge import IMessageBridgeAdapter
+            from app.adapters.messaging.twilio_sms import TwilioSMSAdapter
+
+            # Prefer iMessage bridge; fall back to Twilio
+            if settings.imessage_bridge_url:
+                msg_adapter = IMessageBridgeAdapter(debug_logger, settings.imessage_bridge_url)
+                if not await msg_adapter.is_available():
+                    msg_adapter = TwilioSMSAdapter(
+                        debug_logger,
+                        settings.twilio_account_sid,
+                        settings.twilio_auth_token,
+                        settings.twilio_phone_number,
+                    )
+            else:
                 msg_adapter = TwilioSMSAdapter(
                     debug_logger,
                     settings.twilio_account_sid,
                     settings.twilio_auth_token,
                     settings.twilio_phone_number,
                 )
-        else:
-            msg_adapter = TwilioSMSAdapter(
-                debug_logger,
-                settings.twilio_account_sid,
-                settings.twilio_auth_token,
-                settings.twilio_phone_number,
-            )
 
-        summary_sent = await conv_agent.send_summary(
-            state, msg_adapter, settings.user_phone_number
-        )
+            summary_sent = await conv_agent.send_summary(
+                state, msg_adapter, settings.user_phone_number
+            )
 
     # --- Persist final transcript + status ------------------------------------
     try:
@@ -355,6 +409,8 @@ async def _handle_end_of_call_report(message: dict, supabase: Any, settings) -> 
         "call_id": call_id,
         "run_id": run_id,
         "user_turns": len(user_texts),
+        "events_created": events_created,
+        "post_call_summary_generated": post_call_summary_generated,
         "summary_sent": summary_sent,
     }
 

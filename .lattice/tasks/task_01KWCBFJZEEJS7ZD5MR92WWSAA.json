@@ -1,0 +1,33 @@
+{
+  "assigned_to": null,
+  "branch_links": [],
+  "comment_count": 0,
+  "complexity": "medium",
+  "created_at": "2026-06-30T14:20:00Z",
+  "created_by": "human:khushi",
+  "custom_fields": {
+    "plan_ref": ".lattice/plans/task_01KWCBFJZEEJS7ZD5MR92WWSAA.md"
+  },
+  "description": "Once PlanningAgent.run() generates and stores the daily plan in Supabase, subsequent calls and conversations the same day should load that cached plan rather than re-fetching calendar, weather, and commute data. The daily_plans table already persists the serialised DailyPlanData; the fix is a cache-check at call entry. Implementation: add PlanningAgent.load_today_plan(user_id) that queries daily_plans by user_id + today's date; if a record exists and generated_at is within the configured TTL (default 8h, set via settings.plan_cache_ttl_hours), deserialise it into DailyPlanData and return it without re-running the full pipeline; otherwise run the full planning flow (cache miss). In vapi_webhooks.py and simulate_call.py, attempt load_today_plan() first and only fall back to run() on a cache miss. Add plan_source: Literal['fresh', 'cached'] = 'fresh' to AgentState for observability. Log plan_cache_hit or plan_cache_miss to debug_logs with the plan's generated_at timestamp. Provide a force_refresh=True bypass for explicit refreshes. Touches: agents/planning_agent.py, agents/state.py, api/vapi_webhooks.py, backend/simulate_call.py. Acceptance: second call of the day does not hit calendar/weather/commute APIs; debug_logs shows plan_cache_hit; cached DailyPlanData matches what was stored at the morning call; plan_source field visible in debug output; cache miss still runs full pipeline; force_refresh=True bypasses cache; plan_cache_ttl_hours is configurable in .env.",
+  "done_at": null,
+  "evidence_refs": [],
+  "id": "task_01KWCBFJZEEJS7ZD5MR92WWSAA",
+  "last_event_id": "ev_01KWCBFS5WXKJCFXTME2HP35XA",
+  "last_status_changed_at": "2026-06-30T14:20:00Z",
+  "priority": "high",
+  "relationships_out": [],
+  "reopened_count": 0,
+  "schema_version": 1,
+  "short_id": "DOPS-25",
+  "status": "backlog",
+  "tags": [
+    "planning",
+    "performance",
+    "caching",
+    "phase4"
+  ],
+  "title": "Cache and reuse daily plan — skip re-fetch if plan already generated today",
+  "type": "task",
+  "updated_at": "2026-06-30T14:20:00Z",
+  "urgency": "high"
+}

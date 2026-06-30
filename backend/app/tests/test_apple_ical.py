@@ -4,6 +4,7 @@ import pytest
 import asyncio
 from datetime import datetime, date, timezone, timedelta
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 from icalendar import Calendar as ICalCalendar, Event as ICalEvent
 import tempfile
 
@@ -542,3 +543,139 @@ class TestAppleICalEdgeCases:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ─── DOPS-8: create_event ────────────────────────────────────────────────────
+
+class TestAppleICalCreateEvent:
+    """Tests for AppleICalAdapter.create_event (DOPS-8)."""
+
+    @pytest.fixture
+    def now(self):
+        return datetime.now(timezone.utc).replace(microsecond=0)
+
+    @pytest.fixture
+    def sample_event(self, now):
+        return CalendarEvent(
+            source="apple_ical",
+            title="Gym Session",
+            start_time=now.replace(hour=18, minute=0),
+            end_time=now.replace(hour=19, minute=0),
+        )
+
+    @pytest.mark.asyncio
+    async def test_create_event_caldav_success_returns_event(
+        self, debug_logger, sample_event
+    ):
+        """create_event via CalDAV PUT 201 returns the event with external_id set."""
+        adapter = AppleICalAdapter(
+            debug_logger=debug_logger,
+            caldav_url="https://caldav.icloud.com",
+            username="user@icloud.com",
+            password="app-password",
+        )
+
+        mock_response = MagicMock()
+        mock_response.status_code = 201
+        adapter.http_client = AsyncMock()
+        adapter.http_client.put = AsyncMock(return_value=mock_response)
+
+        result = await adapter.create_event("user1", sample_event)
+
+        assert result is not None
+        assert result.title == "Gym Session"
+        assert result.external_id is not None
+        adapter.http_client.put.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_create_event_caldav_204_returns_event(
+        self, debug_logger, sample_event
+    ):
+        """CalDAV PUT returning 204 (no content) also counts as success."""
+        adapter = AppleICalAdapter(
+            debug_logger=debug_logger,
+            username="user@icloud.com",
+            password="pass",
+        )
+        mock_response = MagicMock()
+        mock_response.status_code = 204
+        adapter.http_client = AsyncMock()
+        adapter.http_client.put = AsyncMock(return_value=mock_response)
+
+        result = await adapter.create_event("user1", sample_event)
+        assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_create_event_caldav_non_2xx_returns_none(
+        self, debug_logger, sample_event
+    ):
+        """CalDAV PUT returning a non-success code returns None."""
+        adapter = AppleICalAdapter(
+            debug_logger=debug_logger,
+            username="user@icloud.com",
+            password="pass",
+        )
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        adapter.http_client = AsyncMock()
+        adapter.http_client.put = AsyncMock(return_value=mock_response)
+
+        result = await adapter.create_event("user1", sample_event)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_create_event_appends_to_ics_file(self, debug_logger, sample_event, tmp_path):
+        """create_event writes a VEVENT to a local .ics file when no CalDAV credentials."""
+        ics_file = tmp_path / "calendar.ics"
+        # Start with a valid empty calendar
+        cal = ICalCalendar()
+        cal.add("prodid", "-//Test//EN")
+        cal.add("version", "2.0")
+        ics_file.write_bytes(cal.to_ical())
+
+        adapter = AppleICalAdapter(
+            debug_logger=debug_logger,
+            ics_file_path=str(ics_file),
+        )
+
+        result = await adapter.create_event("user1", sample_event)
+
+        assert result is not None
+        assert result.external_id is not None
+
+        # Verify the event was actually written
+        written_cal = ICalCalendar.from_ical(ics_file.read_bytes())
+        summaries = [
+            str(c.get("SUMMARY"))
+            for c in written_cal.walk()
+            if c.name == "VEVENT"
+        ]
+        assert "Gym Session" in summaries
+
+    @pytest.mark.asyncio
+    async def test_create_event_creates_ics_file_if_not_exists(
+        self, debug_logger, sample_event, tmp_path
+    ):
+        """create_event creates a new .ics file if the target path doesn't exist yet."""
+        ics_file = tmp_path / "new_calendar.ics"
+        assert not ics_file.exists()
+
+        adapter = AppleICalAdapter(
+            debug_logger=debug_logger,
+            ics_file_path=str(ics_file),
+        )
+
+        result = await adapter.create_event("user1", sample_event)
+
+        assert result is not None
+        assert ics_file.exists()
+
+    @pytest.mark.asyncio
+    async def test_create_event_returns_none_when_not_configured(
+        self, debug_logger, sample_event
+    ):
+        """create_event returns None when neither CalDAV credentials nor .ics file configured."""
+        adapter = AppleICalAdapter(debug_logger=debug_logger)
+
+        result = await adapter.create_event("user1", sample_event)
+        assert result is None
